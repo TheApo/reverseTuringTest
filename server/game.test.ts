@@ -119,8 +119,10 @@ describe('Game', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     const v = view()
     expect(v.phase).toBe('vote')
-    expect(v.answers!.map(a => a.text).sort()).toEqual(['Entwurf von Mia', game.state.round!.question.ai[0]].sort())
-    expect(v.admin!.answers.find(a => a.isAi)!.source).toBe('fallback')
+    const fromAi = v.admin!.answers.find(a => a.isAi)!
+    expect(fromAi.source).toBe('fallback')
+    expect(game.state.round!.question.ai).toContain(fromAi.text)
+    expect(v.answers!.map(a => a.text).sort()).toEqual(['Entwurf von Mia', fromAi.text].sort())
   })
 
   it('lässt die KI bei eigener Frage ohne Ersatzantwort aussetzen', async () => {
@@ -137,7 +139,7 @@ describe('Game', () => {
   it('verwaltet den Fragenplan und sperrt gespielte Fragen', () => {
     expect(view().rounds).toBe(8)
     game.act('plan.add', { question: 'Neu?' })
-    expect(view().admin!.plan.at(-1)).toEqual({ q: 'Neu?', custom: true })
+    expect(view().admin!.plan.at(-1)).toEqual({ q: 'Neu?', topic: 'own', custom: true, own: false })
     game.act('plan.remove', { index: 8 })
     const first = view().admin!.plan[0].q
     join('player', 'Mia')
@@ -145,6 +147,128 @@ describe('Game', () => {
     game.act('plan.remove', { index: 0 }) // läuft gerade → gesperrt
     expect(view().admin!.plan[0].q).toBe(first)
     expect(game.act('plan.add', { catalog: catalog.de.findIndex(c => c.q === first) })).toBe('error.questionUnavailable')
+  })
+
+  it('speichert eigene Fragen mit Ersatzantworten und spielt sie ohne API-Key', async () => {
+    ask.mockRejectedValue(new Error('kein Key'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(game.act('question.save', { question: '  ' })).toBe('error.questionEmpty')
+    expect(game.act('question.save', { question: 'Frage 1?' })).toBe('error.questionExists') // steht im Katalog
+    game.act('question.save', { question: ' Eigene\nFrage? ', ai: ['', ' Als KI sage ich: ja. ', 'Zweite', 'Dritte', 'Vierte'], plan: true })
+    expect(game.own.de).toEqual([{ q: 'Eigene Frage?', ai: ['Als KI sage ich: ja.', 'Zweite', 'Dritte'], topic: 'own' }])
+    expect(view().admin!.own).toEqual([{ q: 'Eigene Frage?', ai: ['Als KI sage ich: ja.', 'Zweite', 'Dritte'] }])
+    expect(view().admin!.plan.at(-1)).toEqual({ q: 'Eigene Frage?', topic: 'own', custom: false, own: true })
+    expect(view().admin!.topics).toContain('own')
+    expect(game.act('question.save', { question: 'Eigene Frage?' })).toBe('error.questionExists')
+
+    game.act('plan.move', { index: 8, to: 0 })
+    const mia = join('player', 'Mia')
+    game.act('start')
+    await vi.advanceTimersByTimeAsync(0)
+    game.answer(mia.id, 'Meine Antwort', true)
+    const texts = view().answers!.map(a => a.text)
+    expect(texts).toHaveLength(2)
+    expect(['Als KI sage ich: ja.', 'Zweite', 'Dritte']).toContain(texts.find(text => text !== 'Meine Antwort'))
+  })
+
+  it('verteilt Ersatzantworten zufällig und ohne Dopplung, egal welche KI eine braucht', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    game.act('settings', { settings: { ais: ['claude', 'openai', 'gemini'] } })
+    game.act('question.save', { question: 'Eine Ersatzantwort?', ai: ['Die einzige.'], plan: true })
+    game.act('question.save', { question: 'Zwei Ersatzantworten?', ai: ['Erste.', 'Zweite.'], plan: true })
+    game.act('plan.move', { index: 8, to: 0 })
+    game.act('plan.move', { index: 9, to: 1 })
+    const mia = join('player', 'Mia')
+    const kati = join('audience', 'Kati')
+    const ais = () => view().admin!.answers.filter(a => a.isAi).map(a => [a.name, a.source, a.text])
+
+    // Nur Gemini hat keinen Key: bekommt die einzige Ersatzantwort, obwohl es die dritte KI ist
+    ask.mockImplementation(async provider => {
+      if (provider === 'gemini') throw new Error('kein Key')
+      return 'Live von ' + provider
+    })
+    game.act('start')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ais()).toContainEqual(['Gemini', 'fallback', 'Die einzige.'])
+    expect(ais().filter(a => a[1] === 'live')).toHaveLength(2)
+
+    // Keine KI hat einen Key, es gibt aber nur zwei Ersatzantworten: zwei verschiedene werden verteilt, eine KI setzt aus
+    game.answer(mia.id, 'Meine Antwort', true)
+    game.vote(kati.id, ['A'], 'A')
+    game.act('reveal')
+    ask.mockRejectedValue(new Error('kein Key'))
+    game.act('start')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ais().filter(a => a[1] === 'fallback').map(a => a[2]).sort()).toEqual(['Erste.', 'Zweite.'])
+    expect(ais().filter(a => a[1] === 'failed')).toHaveLength(1)
+  })
+
+  it('bearbeitet und löscht eigene Fragen, der Plan zieht bei offenen Fragen mit', () => {
+    game.act('question.save', { question: 'Alt?', ai: ['A'], plan: true })
+    game.act('question.save', { original: 'Alt?', question: 'Neu?', ai: ['B'] })
+    expect(game.own.de).toEqual([{ q: 'Neu?', ai: ['B'], topic: 'own' }])
+    expect(game.state.plan.at(-1)).toEqual({ q: 'Neu?', ai: ['B'], topic: 'own' })
+    // Spontane Frage im Plan nachträglich in die Sammlung aufnehmen
+    game.act('plan.add', { question: 'Spontan?' })
+    game.act('question.save', { original: 'Spontan?', question: 'Spontan?', ai: ['C'] })
+    expect(view().admin!.plan.at(-1)).toEqual({ q: 'Spontan?', topic: 'own', custom: false, own: true })
+    expect(game.own.de).toHaveLength(2)
+
+    game.act('settings', { settings: { topics: ['own'] } })
+    game.act('question.delete', { question: 'Neu?' })
+    game.act('question.delete', { question: 'Spontan?' })
+    expect(game.own.de).toEqual([])
+    expect(game.state.settings.topics).toEqual([]) // Thema „eigene“ gibt es nicht mehr
+    expect(game.state.plan.some(p => p.q === 'Neu?')).toBe(true) // bleibt im Plan spielbar
+  })
+
+  it('lädt gespeicherte eigene Fragen und verwirft kaputte und doppelte Einträge', () => {
+    const own = { de: [{ q: 'Gespeichert?', ai: ['Ja.'] }, { q: 'Frage 1?', ai: [] }, { q: '' }, null, { q: 'Gespeichert?' }] } as unknown as Catalog
+    const restored = new Game(catalog, ask, () => {}, undefined, own)
+    expect(restored.own).toEqual({ de: [{ q: 'Gespeichert?', ai: ['Ja.'], topic: 'own' }], en: [] })
+    expect(restored.view({ role: 'admin' }).admin!.catalog.at(-1)).toEqual({ q: 'Gespeichert?', topic: 'own' })
+  })
+
+  it('startet ein frisches Spiel mit dem Standardplan, ein gespeichertes mit seinem eigenen', () => {
+    const own = { de: [{ q: 'Gespeichert?', ai: ['Ja.'] }] }
+    const plan = { de: ['Frage 3?', 'Gespeichert?', 'Gibt es nicht?', 'Frage 3?', 'Frage 1?'] }
+    const fresh = new Game(catalog, ask, () => {}, undefined, undefined, { own, plan })
+    expect(fresh.state.plan.map(p => p.q)).toEqual(['Frage 3?', 'Gespeichert?', 'Frage 1?']) // Unbekanntes und Doppeltes fällt weg
+    expect(fresh.state.plan[1].ai).toEqual(['Ja.'])
+    fresh.act('settings', { settings: { language: 'en' } }) // kein Standardplan für en → Zufallsfragen
+    expect(fresh.state.plan.map(p => p.q)).toEqual(['Question?'])
+    fresh.act('settings', { settings: { language: 'de' } })
+    expect(fresh.state.plan.map(p => p.q)).toEqual(['Frage 3?', 'Gespeichert?', 'Frage 1?'])
+
+    const saved = JSON.parse(JSON.stringify(game.state)) as State
+    expect(new Game(catalog, ask, () => {}, saved, own, { plan }).state.plan).toEqual(saved.plan)
+  })
+
+  it('lädt auf Knopfdruck das Standardsetup: Standardfragen zurück, offener Plan = Standardplan', async () => {
+    const defaults = { own: { de: [{ q: 'Standard?', ai: ['Ja.'] }] }, plan: { de: ['Frage 3?', 'Standard?', 'Frage 1?'] } }
+    const g = new Game(catalog, ask, () => {}, undefined, undefined, defaults)
+    const admin = () => g.view({ role: 'admin' }).admin!
+    expect(admin().hasDefaults).toBe(true)
+    expect(view().admin!.hasDefaults).toBe(false) // Spiel ohne Startbestand
+
+    // Sammlung und Plan verändern, dann zurücksetzen
+    g.act('question.save', { original: 'Standard?', question: 'Standard?', ai: ['Geändert.'] })
+    g.act('question.save', { question: 'Meine neue?', ai: ['Bleibt.'], plan: true })
+    g.act('plan.remove', { index: 0 })
+    g.act('question.delete', { question: 'Standard?' }) // bleibt im Plan, fehlt in der Sammlung
+    g.act('defaults.load')
+    expect(g.state.plan.map(p => p.q)).toEqual(['Frage 3?', 'Standard?', 'Frage 1?'])
+    expect(g.state.plan[1].ai).toEqual(['Ja.'])
+    expect(admin().own).toEqual([{ q: 'Meine neue?', ai: ['Bleibt.'] }, { q: 'Standard?', ai: ['Ja.'] }]) // eigene Zusätze bleiben
+
+    // Im laufenden Spiel bleibt die gespielte Frage stehen, nur die offenen werden ersetzt
+    g.act('plan.move', { index: 2, to: 0 })
+    const p = g.join('player', 'Mia') as Person
+    g.connect(p.id)
+    g.act('start')
+    await vi.advanceTimersByTimeAsync(0)
+    g.act('defaults.load')
+    expect(g.state.plan.map(p => p.q)).toEqual(['Frage 1?', 'Frage 3?', 'Standard?'])
   })
 
   it('verschiebt Fragen nach oben und unten, aber nie vor gespielte', () => {

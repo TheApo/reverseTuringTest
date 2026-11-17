@@ -1,16 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, extname, resolve, sep } from 'node:path'
 import { Server } from 'socket.io'
-import { Game, type Catalog, type State } from './game.ts'
+import { Game, type Catalog, type Defaults, type State } from './game.ts'
 import { askAi, KEYS } from './ai.ts'
 import catalog from './questions.json' with { type: 'json' }
 
 if (existsSync('.env')) process.loadEnvFile() // vorhandene Umgebungsvariablen haben Vorrang
 const PORT = Number(process.env.PORT || 3000)
 const DATA_FILE = process.env.DATA_FILE ?? 'data/game.json' // leer = nichts speichern (Tests)
+const QUESTIONS_FILE = process.env.QUESTIONS_FILE ?? 'data/questions.json' // eigene Fragen, gleiches Format wie server/questions.json
+const DEFAULTS_FILE = process.env.DEFAULTS_FILE ?? 'server/defaults.json' // Startbestand, solange noch nichts gespeichert ist (leer = keiner)
 const PASSWORD = process.env.ADMIN_PASSWORD
 const DEV = process.argv.includes('--dev')
 if (!DEV && !existsSync('dist/index.html')) {
@@ -28,21 +30,28 @@ const ips = Object.values(networkInterfaces()).flat().filter(i => i && i.family 
 const lanIp = ips.find(ip => ip.startsWith('192.168.')) ?? ips[0] ?? 'localhost'
 const joinUrl = process.env.PUBLIC_URL?.replace(/\/$/, '') || `http://${lanIp}:${PORT}`
 
-// ---------- Spielstand laden und sichern ----------
-const load = () => {
-  if (!DATA_FILE || !existsSync(DATA_FILE)) return undefined
+// ---------- Spielstand und eigene Fragen laden und sichern ----------
+const load = <T,>(file: string) => {
+  if (!file || !existsSync(file)) return undefined
   try {
-    return JSON.parse(readFileSync(DATA_FILE, 'utf8')) as State
+    return JSON.parse(readFileSync(file, 'utf8')) as T
   } catch (err) {
-    console.warn(`Spielstand ${DATA_FILE} unlesbar, starte neu:`, err)
+    // Kopie behalten: Ein Tippfehler in einer von Hand bearbeiteten Datei darf sie beim nächsten Sichern nicht kosten
+    copyFileSync(file, `${file}.kaputt`)
+    console.warn(`${file} unlesbar, starte ohne (Kopie liegt in ${file}.kaputt):`, err)
     return undefined
   }
 }
+const write = (file: string, json: string) => {
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(`${file}.tmp`, json)
+  renameSync(`${file}.tmp`, file) // atomar: keine halbe Datei bei Absturz
+}
+let savedOwn = ''
 const save = () => {
-  if (!DATA_FILE) return
-  mkdirSync(dirname(DATA_FILE), { recursive: true })
-  writeFileSync(`${DATA_FILE}.tmp`, JSON.stringify(game.state))
-  renameSync(`${DATA_FILE}.tmp`, DATA_FILE) // atomar: kein halber Spielstand bei Absturz
+  if (DATA_FILE) write(DATA_FILE, JSON.stringify(game.state))
+  const own = JSON.stringify(game.own, null, 1)
+  if (QUESTIONS_FILE && own !== savedOwn) write(QUESTIONS_FILE, savedOwn = own) // nur wenn sich die Sammlung geändert hat
 }
 
 // ---------- HTTP: Vite im Dev-Modus, sonst dist/ ----------
@@ -65,13 +74,17 @@ function serveStatic(req: IncomingMessage, res: ServerResponse) {
 }
 if (DEV) {
   const { createServer: createVite } = await import('vite')
-  const vite = await createVite({ server: { middlewareMode: true, hmr: { server } }, appType: 'spa' })
+  // native: Node lädt vite.config.ts direkt. Sonst legt Vite eine Temp-Kopie an und löscht sie wieder, was node --watch als Änderung sieht und endlos neu startet
+  const vite = await createVite({ configLoader: 'native', server: { middlewareMode: true, hmr: { server } }, appType: 'spa' })
   server.on('request', vite.middlewares)
 } else server.on('request', serveStatic)
 
 // ---------- Socket.IO (nach dem Request-Handler anhängen, damit /socket.io zuerst greift) ----------
 const io = new Server(server, { destroyUpgrade: false })
-const game = new Game(catalog as Catalog, askAi, changed, load())
+// Gespeichertes hat Vorrang: Der Startbestand gilt nur für ein frisches Spiel bzw. solange es keine eigene Fragen-Datei gibt
+const defaults = load<Defaults>(DEFAULTS_FILE)
+const game = new Game(catalog as Catalog, askAi, changed, load<State>(DATA_FILE), load<Catalog>(QUESTIONS_FILE), defaults)
+savedOwn = JSON.stringify(game.own, null, 1)
 const keys = Object.fromEntries(Object.entries(KEYS).map(([p, env]) => [p, !!process.env[env]]))
 
 function changed() {

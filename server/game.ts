@@ -24,9 +24,19 @@ export const DEFAULT_SETTINGS: Settings = {
 }
 const DEFAULT_ROUNDS = 8
 
-/** Eine Frage samt vorbereiteten KI-Ersatzantworten (eigene Fragen haben keine). */
+/** Eine Frage samt vorbereiteten KI-Ersatzantworten (spontane Fragen im Plan haben keine). */
 export interface Question { q: string; ai: string[]; topic?: string }
 export type Catalog = Record<Lang, Question[]>
+/** Startbestand für ein frisches Spiel (server/defaults.json): eigene Fragen und der Fragenplan als Liste von Fragetexten. */
+export interface Defaults { own?: Partial<Catalog>; plan?: Partial<Record<Lang, string[]>> }
+/** Thema der selbst angelegten Fragen. Sie stehen damit wie die mitgelieferten im Katalog. */
+export const OWN_TOPIC = 'own'
+const oneLine = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
+/** Vertraut weder dem Client noch einer von Hand bearbeiteten Datei: Frage bis 200, höchstens 3 Ersatzantworten bis 500 Zeichen. */
+function cleanQuestion(q: unknown, ai: unknown): Question {
+  const answers = (Array.isArray(ai) ? ai : []).map(a => oneLine(a, 500)).filter(Boolean).slice(0, 3)
+  return { q: oneLine(q, 200), ai: answers, topic: OWN_TOPIC }
+}
 /** Avatar-Baukasten: je Teil ein Index in die Varianten (Zeichnungen in src/Avatar.tsx). */
 export const AVATAR_PARTS = { shape: 8, color: 11, face: 9, hat: 12, glasses: 9, extra: 7 } as const
 export type AvatarPart = keyof typeof AVATAR_PARTS
@@ -127,13 +137,26 @@ export class Game {
   private online = new Map<string, number>()
   private timer: ReturnType<typeof setTimeout> | undefined
   private catalog: Catalog
+  /** Selbst angelegte Fragen je Sprache. Der Server sichert sie getrennt vom Spielstand. */
+  own: Catalog = { de: [], en: [] }
+  private defaults: Defaults
   private ask: Ask
   private onChange: () => void
 
-  constructor(catalog: Catalog, ask: Ask, onChange: () => void, saved?: State) {
+  /** own = gespeicherte eigene Fragen. Fehlen sie, gelten die aus dem Startbestand (defaults). */
+  constructor(catalog: Catalog, ask: Ask, onChange: () => void, saved?: State, own?: Partial<Catalog>, defaults: Defaults = {}) {
     this.catalog = catalog
+    this.defaults = defaults
+    own ??= defaults.own
     this.ask = ask
     this.onChange = onChange
+    for (const lang of ['de', 'en'] as const) {
+      const list = Array.isArray(own?.[lang]) ? own[lang] : []
+      for (const raw of list) {
+        const q = cleanQuestion(raw?.q, raw?.ai)
+        if (q.q && !this.isKnown(q.q, lang)) this.own[lang].push(q)
+      }
+    }
     this.state = saved ?? {
       phase: 'lobby', settings: { ...DEFAULT_SETTINGS }, people: [], round: null,
       plan: [], history: [], paused: false, endsAt: null, remaining: null,
@@ -142,7 +165,7 @@ export class Game {
       saved.settings = { ...DEFAULT_SETTINGS, ...saved.settings } // neue Einstellungen in alten Spielständen
       this.resume()
     }
-    else this.drawPlan(DEFAULT_ROUNDS)
+    else this.startPlan(DEFAULT_ROUNDS)
   }
 
   // ---------- Beitreten & Verbindung ----------
@@ -261,6 +284,43 @@ export class Game {
         s.plan[index] = { q: custom, ai: [] }
         break
       }
+      case 'question.save': { // neue eigene Frage, oder original = bisheriger Text der bearbeiteten Frage
+        const own = this.own[s.settings.language]
+        const q = cleanQuestion(args.question, args.ai)
+        const original = typeof args.original === 'string' ? args.original : null
+        const at = own.findIndex(x => x.q === original)
+        if (!q.q) return 'error.questionEmpty'
+        const taken = q.q === original ? at < 0 && this.isKnown(q.q) : this.isKnown(q.q) || s.plan.some(p => p.q === q.q)
+        if (taken) return 'error.questionExists'
+        if (at >= 0) own[at] = q
+        else own.push(q)
+        // Offene Plan-Einträge mit dem alten Text übernehmen die neue Fassung
+        s.plan = s.plan.map((p, i) => (i >= this.played() && p.q === original ? q : p))
+        if (args.plan && !s.plan.some(p => p.q === q.q)) s.plan.push(q)
+        break
+      }
+      case 'question.delete': { // löscht nur aus der Sammlung, im Plan bleibt die Frage stehen
+        const own = this.own[s.settings.language]
+        const at = own.findIndex(x => x.q === args.question)
+        if (at < 0) return
+        own.splice(at, 1)
+        s.settings.topics = s.settings.topics.filter(t => this.topics().includes(t))
+        break
+      }
+      case 'defaults.load': { // Standardsetup: Standardfragen zurück in die Sammlung, offene Fragen im Plan = Standardplan
+        const own = this.own[s.settings.language]
+        for (const raw of this.defaults.own?.[s.settings.language] ?? []) {
+          const q = cleanQuestion(raw?.q, raw?.ai)
+          if (!q.q || this.catalog[s.settings.language].some(x => x.q === q.q)) continue
+          const at = own.findIndex(x => x.q === q.q)
+          if (at >= 0) own[at] = q // auch geänderte Ersatzantworten gehen auf den Standard zurück
+          else own.push(q)
+        }
+        const done = s.plan.slice(0, this.played())
+        const fixed = this.defaultQuestions().filter(q => !done.some(p => p.q === q.q))
+        if (fixed.length) s.plan = [...done, ...fixed]
+        break
+      }
       case 'start':
         if (s.phase !== 'lobby' && s.phase !== 'reveal') return 'error.roundRunning'
         if (!s.plan[this.played()]) return 'error.noQuestions'
@@ -349,8 +409,8 @@ export class Game {
       if (Array.isArray(patch.topics)) s.topics = this.topics().filter(t => patch.topics!.includes(t))
       if ((patch.language === 'de' || patch.language === 'en') && patch.language !== s.language) {
         s.language = patch.language
-        // Neue Sprache, neuer Katalog: Plan gleicher Länge neu auslosen
-        this.drawPlan(this.state.plan.length || DEFAULT_ROUNDS)
+        // Neue Sprache, neuer Katalog: Standardplan der Sprache, sonst Plan gleicher Länge neu auslosen
+        this.startPlan(this.state.plan.length || DEFAULT_ROUNDS)
       }
     }
     this.changed()
@@ -389,15 +449,18 @@ export class Game {
   private aiAnswer(roundNo: number, id: string, text: string, ms: number) {
     const r = this.state.round
     if (!r || r.no !== roundNo || this.state.phase !== 'answer' || r.answers.some(a => a.authorId === id)) return
-    const got = text ? { source: 'live' as const, text, ms } : { ...this.fallback(id), ms: null }
+    const got = text ? { source: 'live' as const, text, ms } : { ...this.fallback(), ms: null }
     r.answers.push({ authorId: id, final: true, hidden: false, letter: null, ...got })
     this.changed()
     this.checkAnswerEnd()
   }
 
-  /** Ersatzantwort aus dem Katalog. Jede KI nimmt eine andere; eigene Fragen haben keine. */
-  private fallback(id: string): { source: Answer['source']; text: string } {
-    const text = this.state.round!.question.ai[this.state.settings.ais.indexOf(id as Provider)] ?? ''
+  /** Ersatzantwort der Frage: zufällig eine, die in dieser Runde noch keine andere KI genommen hat. Ist keine mehr frei, setzt die KI aus. */
+  private fallback(): { source: Answer['source']; text: string } {
+    const r = this.state.round!
+    const taken = new Set(r.answers.map(a => a.text))
+    const free = r.question.ai.filter(text => !taken.has(text))
+    const text = free[Math.floor(Math.random() * free.length)] ?? ''
     return text ? { source: 'fallback', text } : { source: 'failed', text: '' }
   }
 
@@ -411,7 +474,7 @@ export class Game {
   private toVote() {
     const s = this.state, r = s.round!
     for (const ai of this.players().filter(p => p.role === 'ai' && !r.answers.some(a => a.authorId === p.id))) {
-      r.answers.push({ authorId: ai.id, ...this.fallback(ai.id), final: true, hidden: false, letter: null, ms: null })
+      r.answers.push({ authorId: ai.id, ...this.fallback(), final: true, hidden: false, letter: null, ms: null })
     }
     // Entwürfe gelten bei Zeitablauf als abgeschickt, leere fallen weg
     for (const a of r.answers) a.final = true
@@ -493,7 +556,9 @@ export class Game {
   private person(id: string) { return this.state.people.find(p => p.id === id) }
   /** Spieler und KIs, also alle, die Antworten schreiben. */
   private players() { return this.state.people.filter(p => p.role !== 'audience') }
-  private questions() { return this.catalog[this.state.settings.language] }
+  /** Mitgelieferte und eigene Fragen der Spielsprache. Eigene hängen hinten an, die Katalog-Nummern bleiben also stabil. */
+  private questions() { return [...this.catalog[this.state.settings.language], ...this.own[this.state.settings.language]] }
+  private isKnown(q: string, lang = this.state.settings.language) { return [...this.catalog[lang], ...this.own[lang]].some(x => x.q === q) }
   /** Anzahl gestarteter Runden = Index der nächsten Frage im Plan. */
   private played() { return this.state.round?.no ?? 0 }
   private visible() {
@@ -508,6 +573,19 @@ export class Game {
     const { topics } = this.state.settings
     const free = this.questions().filter(q => !this.state.plan.some(p => p.q === q.q) && (!topics.length || topics.includes(q.topic ?? '')))
     return free[Math.floor(Math.random() * free.length)] as Question | undefined
+  }
+
+  /** Plan für ein frisches Spiel: der hinterlegte Standardplan der Sprache, ohne einen solchen count Zufallsfragen. */
+  private startPlan(count: number) {
+    const fixed = this.defaultQuestions()
+    if (fixed.length) this.state.plan = fixed
+    else this.drawPlan(count)
+  }
+
+  /** Der Standardplan der Spielsprache als Fragen. Texte, die es weder im Katalog noch in der Sammlung gibt, fallen weg. */
+  private defaultQuestions() {
+    const wanted = [...new Set(this.defaults.plan?.[this.state.settings.language] ?? [])]
+    return wanted.map(q => this.questions().find(x => x.q === q)).filter(x => x !== undefined)
   }
 
   /** Ersetzt alle ungespielten Fragen durch count neue Zufallsfragen. */
@@ -540,6 +618,8 @@ export class Game {
       sound: s.settings.sound,
       beamerTheme: s.settings.beamerTheme,
       aiCount: s.phase === 'vote' ? this.k() : s.settings.ais.length,
+      // Welche KIs mitspielen, ist kein Geheimnis, nur welche Antwort von ihnen stammt
+      ais: s.settings.ais,
       question: s.phase === 'lobby' ? null : r?.question.q ?? null,
       players: byPoints(this.players()).map(p => ({
         id: p.id, name: p.name, points: p.points, isAi: p.role === 'ai', avatar: p.avatar ?? null,
@@ -573,7 +653,10 @@ export class Game {
     const s = this.state
     return {
       settings: s.settings,
-      plan: s.plan.map(p => ({ q: p.q, custom: !p.ai.length })),
+      // custom = ohne Ersatzantwort, own = steht in der eigenen Sammlung. Spontane Fragen ohne Thema zählen zu den eigenen
+      plan: s.plan.map(p => ({ q: p.q, topic: p.topic ?? OWN_TOPIC, custom: !p.ai.length, own: this.own[s.settings.language].some(o => o.q === p.q) })),
+      own: this.own[s.settings.language].map(o => ({ q: o.q, ai: o.ai })),
+      hasDefaults: !!(this.defaults.plan?.[s.settings.language]?.length || this.defaults.own?.[s.settings.language]?.length),
       catalog: this.questions().map(q => ({ q: q.q, topic: q.topic ?? '' })),
       topics: this.topics(),
       people: s.people.filter(p => p.role !== 'ai').map(p => ({ id: p.id, name: p.name, role: p.role, points: p.points, avatar: p.avatar ?? null, online: this.online.has(p.id) })),

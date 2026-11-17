@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { ResultAnswer } from '../server/game.ts'
+import { AI_NAMES, type ResultAnswer } from '../server/game.ts'
 import { Avatar, PersonAvatar } from './Avatar.tsx'
-import { setLang, t, tn } from './i18n.ts'
+import { setLang, t, tn, type Key } from './i18n.ts'
 import { useGame, type View } from './socket.ts'
 import { SOUNDS, play, soundReady, unlockSound } from './sound.ts'
 import { Brand, Icon, Qr, clock, rankOf, secondsLeft, setTheme, timerClass, useNow } from './ui.tsx'
@@ -111,6 +111,9 @@ const Letter = ({ letter }: { letter: string }) => (
   <span className="grid size-12 shrink-0 place-items-center rounded-pill bg-strong font-display text-2xl font-extrabold text-on-strong">{letter}</span>
 )
 
+/** Untertitel der Lobby passend zur Zahl der mitspielenden KIs (1 bis 3). */
+const TAGLINES: Key[] = ['app.tagline', 'app.tagline2', 'app.tagline3']
+
 /** Spalten und Schriftgröße passend zur Zahl der Antworten. */
 const gridFor = (n: number): { style: CSSProperties; font: number } =>
   n <= 4 ? { style: { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }, font: 26 }
@@ -120,22 +123,42 @@ const gridFor = (n: number): { style: CSSProperties; font: number } =>
 function Lobby({ view }: { view: View }) {
   const humans = view.players.filter(p => !p.isAi)
   const urls = joinUrls(view)
+  // Schilder für Menschen und KIs: je mehr es sind, desto kleiner, damit beide Gruppen aufs Bild passen.
+  // Die Höchstbreite kürzt lange Namen statt umzubrechen, so bleiben es höchstens 3 bzw. 4 Zeilen
+  const count = humans.length + view.ais.length
+  const size = count <= 6 ? 0 : count <= 12 ? 1 : 2
+  const chip = ['max-w-[330px] py-1.5 pr-4 pl-2 text-[24px]', 'max-w-[212px] py-1 pr-3 pl-1.5 text-[19px]', 'max-w-[164px] py-0.5 pr-2.5 pl-1 text-[17px]'][size]
+  const avatar = [44, 34, 30][size]
+  const full = size > 0 || view.crowd.length > 12 // volle Lobby: der Untertitel macht Platz für die Leute
   return (
     <>
       <Top view={view} />
       <main className="grid min-h-0 flex-1 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-12">
         <JoinCard title={t('beamer.joinPlayer')} hint={t('beamer.joinPlayerHint')} url={urls.player} size={300} />
-        <div className="flex flex-col items-center gap-6 text-center">
+        <div className="flex min-w-0 flex-col items-center gap-5 text-center">
           <span className="label text-base">{t('beamer.waiting')}</span>
-          <h1 className="display m-0 text-[96px]">{t('app.headline')}</h1>
-          <p className="m-0 max-w-[560px] text-[26px] leading-snug text-muted">{t('app.tagline')}</p>
-          <div className="flex flex-col items-center gap-3">
-            <span className="label text-base">{t('beamer.slots', { n: humans.length, max: view.maxPlayers })} · {tn('audience.aiPlaying', view.aiCount)}</span>
-            <ul className="m-0 flex list-none flex-wrap justify-center gap-3 p-0">
-              {humans.map(p => <li key={p.id} className="anim-pop chip bg-card py-1.5 pr-4 pl-2 font-display text-[24px] tracking-normal normal-case"><PersonAvatar p={p} size={44} />{p.name}</li>)}
+          <h1 className="display m-0 text-[60px] whitespace-nowrap">{t('app.headline')}</h1>
+          {!full && <p className="m-0 max-w-[560px] text-[22px] leading-snug text-muted">{t(TAGLINES[view.aiCount - 1] ?? 'app.tagline')}</p>}
+          <Group strong icon="pen" title={t('people.players', { n: humans.length, max: view.maxPlayers })}
+            hint={`${t('beamer.playersDo')} · ${tn('audience.aiPlaying', view.aiCount)}`} empty={!count}>
+            <ul className="m-0 flex list-none flex-wrap justify-center gap-2.5 p-0">
+              {humans.map(p => (
+                <li key={p.id} className={`anim-pop chip bg-card font-display tracking-normal normal-case ${chip}`}>
+                  <PersonAvatar p={p} size={avatar} /><span className="min-w-0 truncate">{p.name}</span>
+                </li>
+              ))}
+              {/* Die mitspielenden KIs: gleiches Schild, als Roboter und mit KI-Marke */}
+              {view.ais.map(id => (
+                <li key={id} className={`anim-pop chip border-ai bg-card font-display tracking-normal normal-case ${chip}`}>
+                  <PersonAvatar p={{ id, name: AI_NAMES[id], isAi: true }} size={avatar} /><span className="min-w-0 truncate">{AI_NAMES[id]}</span>
+                  <span className="chip border-transparent bg-ai px-1.5 py-0 text-[11px] text-on-ai">{t('common.ai')}</span>
+                </li>
+              ))}
             </ul>
-          </div>
-          <Crowd view={view} />
+          </Group>
+          <Group icon="eye" title={t('people.audience', { n: view.audience })} hint={t('beamer.audienceDo')} empty={!view.crowd.length}>
+            <Crowd view={view} />
+          </Group>
         </div>
         <JoinCard title={t('beamer.joinAudience')} hint={t('beamer.joinAudienceHint')} url={urls.audience} size={300} />
       </main>
@@ -143,19 +166,36 @@ function Lobby({ view }: { view: View }) {
   )
 }
 
+/** Beschrifteter Kasten in der Lobby: trennt sichtbar, wer spielt (kräftiger Kopf) und wer im Publikum sitzt (heller Kopf). */
+function Group({ icon, title, hint, strong = false, empty, children }: {
+  icon: 'pen' | 'eye'; title: string; hint: string; strong?: boolean; empty: boolean; children: ReactNode
+}) {
+  return (
+    <section className="frame flex w-full flex-col overflow-hidden">
+      <header className={`flex items-center justify-between gap-4 px-4 py-2 ${strong ? 'bg-strong text-on-strong' : 'bg-raised text-ink'}`}>
+        <h2 className="m-0 flex items-center gap-2.5 font-display text-[26px] font-extrabold"><Icon name={icon} size={26} />{title}</h2>
+        <span className="label text-[13px] text-current">{hint}</span>
+      </header>
+      <div className="p-3">{empty ? <p className="m-0 text-lg text-muted">{t('people.nobody')}</p> : children}</div>
+    </section>
+  )
+}
+
 /** Die Gesichter im Publikum, damit jede:r sich auf dem Beamer wiederfindet. */
 function Crowd({ view }: { view: View }) {
-  if (!view.crowd.length) return null
   const n = view.crowd.length
-  const size = n <= 12 ? 64 : n <= 30 ? 48 : 36 // wenige groß, viele kleiner, damit alle aufs Bild passen
+  // wenige groß und mit Namen, viele nur als Köpfe, damit alle aufs Bild passen
+  const { size, cell, font } = n <= 12 ? { size: 52, cell: 84, font: 15 } : n <= 30 ? { size: 40, cell: 62, font: 12 } : { size: 34, cell: 0, font: 0 }
   return (
-    <div className="flex flex-col items-center gap-2">
-      <span className="label text-sm">{tn('beamer.audienceCount', view.audience)}</span>
-      <ul className="m-0 flex max-w-[680px] list-none flex-wrap justify-center gap-1.5 p-0">
-        {view.crowd.map(p => <li key={p.id} title={p.name} className="anim-pop"><Avatar value={p.avatar} seed={p.name} size={size} label={p.name} /></li>)}
-        {view.audience > view.crowd.length && <li className="label grid h-10 place-items-center px-2 text-ink">+{view.audience - view.crowd.length}</li>}
-      </ul>
-    </div>
+    <ul className="m-0 flex list-none flex-wrap justify-center gap-x-1.5 gap-y-2 p-0">
+      {view.crowd.map(p => (
+        <li key={p.id} title={p.name} className="anim-pop flex flex-col items-center gap-0.5" style={cell ? { width: cell } : undefined}>
+          <Avatar value={p.avatar} seed={p.name} size={size} label={cell ? undefined : p.name} />
+          {cell > 0 && <span className="w-full truncate text-center font-semibold" style={{ fontSize: font }}>{p.name}</span>}
+        </li>
+      ))}
+      {view.audience > n && <li className="label grid h-10 place-items-center px-2 text-ink">+{view.audience - n}</li>}
+    </ul>
   )
 }
 
@@ -204,7 +244,7 @@ function Voting({ view }: { view: View }) {
     <>
       <Top view={view} right={tn('beamer.votes', view.voters)} />
       <section className="flex flex-col gap-1.5">
-        <span className="label text-sm">{t('beamer.voteNow')} · {tn('audience.aiPlaying', view.aiCount)}</span>
+        <span className="label text-sm">{tn('beamer.voteNow', Math.max(1, view.aiCount))} · {tn('audience.aiPlaying', view.aiCount)}</span>
         <h1 className="display m-0 text-[54px]">{view.question}</h1>
       </section>
       <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_300px] gap-9">
@@ -276,7 +316,7 @@ function Reveal({ view }: { view: View }) {
         </div>
         <aside className="flex min-h-0 flex-col gap-4">
           <section className="frame anim-rise flex flex-col gap-1 p-5" style={{ animationDelay: `${late}ms` }}>
-            <span className="label text-sm">{t('beamer.standings')}</span>
+            <span className="label text-sm">{t('beamer.standings')} · {t('role.player')}</span>
             <ol className="m-0 flex list-none flex-col p-0">
               {view.players.slice(0, 6).map(p => (
                 <li key={p.id} className="grid grid-cols-[30px_minmax(0,1fr)_auto_auto] items-center gap-2.5 border-b border-line py-1.5 last:border-0">
@@ -306,7 +346,7 @@ function Detectives({ view, delay }: { view: View; delay: number }) {
   if (!view.detectives.length) return null
   return (
     <section className="card anim-rise flex flex-col gap-2 p-5" style={{ animationDelay: `${delay}ms` }}>
-      <span className="label text-sm">{t('beamer.detectives')}</span>
+      <span className="label text-sm">{t('beamer.detectives')} · {t('role.audience')}</span>
       {view.detectives.map(d => (
         <div key={d.name} className="flex items-center justify-between text-[19px] font-semibold">
           <span className="flex items-center gap-2"><Avatar value={d.avatar} seed={d.name} size={32} />{d.name}</span><span className="label text-sm">{tn('beamer.hits', d.points)}</span>
@@ -363,7 +403,7 @@ function FinalPlayers({ view }: { view: View }) {
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-4">
       <Confetti />
-      <span className="label text-center text-base">{t('phase.final')}</span>
+      <span className="label text-center text-base">{t('phase.final')} · {t('role.player')}</span>
       <h1 className="display anim-pop m-0 text-center text-[92px]">{machine ? t('final.machineWins') : t('final.humansWin')}</h1>
       <Podium unit={n => tn('common.points', n)} entries={ranked.slice(0, 3).map((p, i) => ({
         id: p.id, name: p.name, points: p.points, avatar: <PersonAvatar p={p} size={big(i)} />,
@@ -381,7 +421,7 @@ function FinalDetectives({ view }: { view: View }) {
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-4">
       {d.length > 0 && <Confetti />}
-      <span className="label text-center text-base">{t('final.detectivesSub')}</span>
+      <span className="label text-center text-base">{t('role.audience')} · {t('final.detectivesSub')}</span>
       <h1 className="display anim-pop m-0 text-center text-[92px]">{t('final.detectivesTitle')}</h1>
       {d.length ? (
         <Podium unit={n => tn('beamer.hits', n)} entries={d.map((p, i) => ({

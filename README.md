@@ -87,7 +87,7 @@ Bei Gleichstand bekommen alle die Punkte. Die KIs stehen mit in der Rangliste: M
 ## Was alles drinsteckt
 
 - **Echte KIs, live:** bis zu drei gleichzeitig, Claude (Haiku 5.5), ChatGPT und Gemini. Wählbar ist der Stil „natürlich“ (klingt wie eine KI) oder „getarnt“ (gibt sich menschlich). Die Antworten sind kurz und ohne Emojis, damit sich die KI nicht sofort verrät. Ohne Key oder bei Ausfall spielt eine vorbereitete Ersatzantwort.
-- **62 Fragen pro Sprache** in drei Themen: Alltag & Allerlei, **Weihnachten** und Team-Insider. Den Fragenplan sortierst du per Drag & Drop, eigene Fragen gehen jederzeit und auch spontan.
+- **62 Fragen pro Sprache** in drei Themen: Alltag & Allerlei, **Weihnachten** und Team-Insider. Den Fragenplan sortierst du per Drag & Drop. **Eigene Fragen** legst du im Admin samt Ersatzantworten an, sie bleiben für das nächste Spiel gespeichert.
 - **Avatar-Baukasten** mit 56 Varianten: Form, Farbe, Gesicht, Hut, Brille und Extras wie Schal, Fliege oder Weihnachtsmann-Bart. Bis zum Spielstart änderbar, live auf dem Beamer.
 - **Fühlt sich gut an:** Knöpfe geben beim Drücken nach, Stempel knallen auf die Antworten, die letzten zehn Sekunden pochen. Dazu kurzes Vibrieren am Handy und dezente Töne am Beamer.
 - **Hell und dunkel** in den Markenfarben, **Deutsch und Englisch**, jedes Handy wählt selbst.
@@ -160,7 +160,7 @@ Im Firmennetz kann ein Tunnel nach außen gesperrt oder nicht erlaubt sein. Klä
 | `OPENAI_API_KEY` | ChatGPT | `gpt-5.6-terra` (`OPENAI_MODEL`) |
 | `GEMINI_API_KEY` | Gemini | `gemini-flash-latest` (`GEMINI_MODEL`) |
 
-- Ohne Key, bei einem Fehler, einer Ablehnung oder einer Zeitüberschreitung schreibt die KI eine vorbereitete **Ersatzantwort** aus dem Katalog. Das Spiel läuft also auch ganz ohne Keys. Bei eigenen Fragen gibt es keine Ersatzantwort, dann setzt die KI diese Runde aus.
+- Ohne Key, bei einem Fehler, einer Ablehnung oder einer Zeitüberschreitung schreibt die KI eine vorbereitete **Ersatzantwort** aus dem Katalog. Das Spiel läuft also auch ganz ohne Keys. Eigene Fragen bekommen ihre Ersatzantworten im Admin (Reiter **Fragen** → **Neue Frage**). Fehlt dort eine, setzt die KI diese Runde aus.
 - Im Admin zeigt der Reiter **Spiel**, welche KI einen Key hat. In der Antwortliste steht „live in 2,1 s“ oder „Ersatzantwort“, den Grund findest du in der Server-Konsole (`[KI] …`).
 - Die KIs sollen kurz antworten (Ziel: gut die Hälfte des Zeichenlimits). Der Server entfernt zusätzlich Emojis und Smileys und kürzt notfalls am Satz- oder Wortende.
 
@@ -186,6 +186,8 @@ Jede KI bekommt eine eigene Ersatzantwort, deshalb sind es drei. Themen sind `ev
 | `PORT` | Port, Standard `3000` |
 | `PUBLIC_URL` | feste Adresse für die QR-Codes, sonst automatisch die WLAN-IP bzw. die Adresse, über die der Beamer geöffnet ist |
 | `DATA_FILE` | Spielstand-Sicherung, Standard `data/game.json` (leer = nicht speichern). Löschen für einen ganz frischen Start, oder im Admin „Neues Spiel“ |
+| `QUESTIONS_FILE` | eigene Fragen aus dem Admin, Standard `data/questions.json` (leer = nicht speichern). Gleiches Format wie `server/questions.json`, bleibt bei „Neues Spiel“ erhalten |
+| `DEFAULTS_FILE` | Startbestand für ein frisches Spiel, Standard `server/defaults.json`: eigene Fragen (`own`) und Fragenplan (`plan`, Fragetexte in Reihenfolge). Gilt nur, solange noch kein Spielstand bzw. keine eigene Fragen-Datei gespeichert ist |
 | `*_API_KEY`, `*_MODEL` | siehe [KI-Anbindung](#ki-anbindung) |
 
 ### Tests

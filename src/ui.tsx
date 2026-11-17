@@ -45,6 +45,7 @@ const PATHS = {
   ai: <><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 17h5" /></>,
   fun: <><circle cx="12" cy="12" r="9" /><path d="M8 14.5c1 1.5 2.4 2.2 4 2.2s3-.7 4-2.2M9 9.5h.01M15 9.5h.01" /></>,
   eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
+  pen: <path d="M4 20l1.2-4.8L16.6 3.8a2 2 0 0 1 2.8 0l.8.8a2 2 0 0 1 0 2.8L8.8 18.8 4 20zM14.5 6l3.5 3.5" />,
   eyeOff: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></>,
   sound: <><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" /></>,
   mute: <><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M17 9l5 5M22 9l-5 5" /></>,
@@ -107,14 +108,15 @@ export function PrefButtons() {
   )
 }
 
-/** wide: Admin am Desktop nutzt bis 1280 px Breite, Spieler und Publikum bleiben handybreit. */
-export function Phone({ children, chip, online = true, wide = false }: { children: ReactNode; chip?: ReactNode; online?: boolean; wide?: boolean }) {
+/** wide: Admin am Desktop nutzt bis 1280 px Breite, Spieler und Publikum bleiben handybreit. menu: eigenes Element statt des Namensschilds. */
+export function Phone({ children, chip, menu, online = true, wide = false }: { children: ReactNode; chip?: ReactNode; menu?: ReactNode; online?: boolean; wide?: boolean }) {
   return (
     <div className={'mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-4 pb-6 ' + (wide ? 'lg:max-w-[1280px] lg:gap-6 lg:px-8 lg:pt-6' : '')}>
       <header className="flex items-center justify-between gap-3">
         <Brand />
         <div className="flex items-center gap-2">
           {chip && <span className="chip max-w-40 truncate bg-card py-1 pl-1.5 normal-case tracking-normal">{chip}</span>}
+          {menu}
           <PrefButtons />
         </div>
       </header>
@@ -198,21 +200,29 @@ export function Kicked() {
   )
 }
 
-/** Wer ist dabei: Zahlen und die Köpfe von Spielern und Publikum, damit man sieht, wie viele mitmachen. */
+/** Wer ist dabei: Spieler und Publikum getrennt und mit Namen, das eigene Schild ist hervorgehoben. */
 export function Crowd({ view }: { view: View }) {
   const humans = view.players.filter(p => !p.isAi)
+  const group = (icon: 'pen' | 'eye', title: string, people: { id: string; name: string; avatar: AvatarValue | null }[], more = 0) => (
+    <div className="flex flex-col gap-2">
+      <h3 className="label m-0 flex items-center gap-1.5 text-ink"><Icon name={icon} size={16} />{title}</h3>
+      {people.length ? (
+        <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+          {people.map(p => (
+            <li key={p.id} className={`chip anim-pop max-w-full py-1 pr-2.5 pl-1.5 normal-case tracking-normal ${p.id === view.me?.id ? 'border-transparent bg-strong text-on-strong' : 'bg-card'}`}>
+              <Avatar value={p.avatar} seed={p.name} size={26} /><span className="min-w-0 truncate">{p.name}</span>
+            </li>
+          ))}
+          {more > 0 && <li className="label grid h-9 place-items-center px-1 text-ink">+{more}</li>}
+        </ul>
+      ) : <p className="m-0 text-sm text-muted">{t('people.nobody')}</p>}
+    </div>
+  )
   return (
-    <section className="card flex flex-col gap-3 p-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="label text-ink">{t('crowd.title')}</span>
-        <span className="label">{t('crowd.summary', { players: humans.length, audience: view.audience })}</span>
-      </div>
-      <ul className="m-0 flex list-none flex-wrap gap-1 p-0">
-        {[...humans, ...view.crowd].map(p => (
-          <li key={p.id} title={p.name} className="anim-pop"><Avatar value={p.avatar} seed={p.name} size={34} label={p.name} /></li>
-        ))}
-        {view.audience > view.crowd.length && <li className="label grid h-[34px] place-items-center px-1 text-ink">+{view.audience - view.crowd.length}</li>}
-      </ul>
+    <section className="card flex flex-col gap-4 p-4">
+      <h2 className="label m-0">{t('crowd.title')}</h2>
+      {group('pen', t('people.players', { n: humans.length, max: view.maxPlayers }), humans)}
+      {group('eye', t('people.audience', { n: view.audience }), view.crowd, view.audience - view.crowd.length)}
     </section>
   )
 }

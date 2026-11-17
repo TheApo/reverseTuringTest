@@ -26,7 +26,9 @@ test('eine ganze Partie: beitreten, antworten, abstimmen, auflösen, Finale', as
   await admin.mouse.down()
   await admin.mouse.move(handle!.x + handle!.width / 2, top!.y + 4, { steps: 10 })
   await admin.mouse.up()
+  await admin.mouse.move(handle!.x + 40, top!.y + 60, { steps: 5 }) // Maus wandert nach dem Loslassen weiter
   await expect(rows.nth(0).locator('p')).toHaveText(third)
+  await expect(admin.locator('ol > li[aria-hidden="true"]')).toHaveCount(0) // Karte ist eingerastet, schwebt nicht mehr
   for (let i = 8; i > 1; i--) await admin.getByRole('button', { name: `Frage ${i} entfernen` }).click()
   await expect(admin.getByRole('heading', { name: 'Fragenplan · 1 Runde' })).toBeVisible()
 
@@ -88,4 +90,34 @@ test('Startseite schaltet auf Englisch um', async ({ browser }) => {
   await page.getByRole('button', { name: 'Switch to English' }).click()
   await expect(page.getByRole('heading', { name: 'Human or machine?' })).toBeVisible()
   await expect(page.getByRole('link', { name: /Play/ })).toHaveAttribute('href', '/play')
+})
+
+test('eigene Frage mit Ersatzantwort anlegen, bearbeiten und löschen', async ({ browser }) => {
+  const admin = await open(browser, '/admin')
+  await admin.getByLabel('Passwort').fill('test')
+  await admin.getByRole('button', { name: 'Anmelden' }).click()
+  await admin.getByRole('tab', { name: /Fragen/ }).click()
+
+  await admin.getByRole('button', { name: 'Neue Frage' }).click()
+  const dialog = admin.getByRole('dialog')
+  await dialog.getByLabel(/^Frage/).fill('Was ist dein geheimes Talent?')
+  await expect(dialog.getByText('Ohne API-Key: Claude.')).toBeVisible() // kein Key und noch keine Ersatzantwort
+  await dialog.getByLabel(/Antwort 1/).fill('Ich kann sehr überzeugend zuhören.')
+  await expect(dialog.getByText('Ohne API-Key')).toBeHidden()
+  await dialog.getByRole('button', { name: 'Speichern und in den Plan' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(admin.getByText('Eigene Fragen · 1 Frage')).toBeVisible()
+  await expect(admin.getByText('1 Ersatzantwort', { exact: true })).toBeVisible()
+
+  // Bearbeiten ändert Sammlung und Plan
+  await admin.getByRole('button', { name: 'Frage bearbeiten: Was ist dein geheimes Talent?' }).click()
+  await expect(dialog.getByLabel(/Antwort 1/)).toHaveValue('Ich kann sehr überzeugend zuhören.')
+  await dialog.getByLabel(/^Frage/).fill('Was ist dein peinlichstes Talent?')
+  await dialog.getByRole('button', { name: 'Speichern', exact: true }).click()
+  await expect(admin.getByText('Was ist dein peinlichstes Talent?')).toHaveCount(2)
+
+  admin.once('dialog', d => d.accept()) // Sicherheitsfrage beim Löschen
+  await admin.getByRole('button', { name: 'Frage bearbeiten: Was ist dein peinlichstes Talent?' }).click()
+  await dialog.getByRole('button', { name: 'Löschen' }).click()
+  await expect(admin.getByText('Eigene Fragen · 0 Fragen')).toBeVisible()
 })

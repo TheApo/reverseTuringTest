@@ -1,8 +1,9 @@
 import { motion } from 'motion/react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { AI_NAMES, type Provider, type Settings } from '../server/game.ts'
+import { AI_NAMES, OWN_TOPIC, type Provider, type Settings } from '../server/game.ts'
 import { Avatar, PersonAvatar } from './Avatar.tsx'
 import { t, tError, tn, type Key } from './i18n.ts'
+import { QuestionEditor, type QuestionDraft } from './QuestionEditor.tsx'
 import { admin, useGame, type View } from './socket.ts'
 import { Icon, JoinForm, Loading, Phone, SPRING, buzz, clock, rankOf, secondsLeft, timerClass, useNow } from './ui.tsx'
 
@@ -12,7 +13,6 @@ type Tab = 'round' | 'questions' | 'people' | 'game'
 export default function Admin() {
   const { view, status, online, enter, logout } = useGame('admin')
   const [tab, setTab] = useState<Tab>('round')
-  const [menu, setMenu] = useState(false)
   const [error, setError] = useState('')
   if (status === 'join') return <Phone online={online}><JoinForm role="admin" onSubmit={enter} /></Phone>
   if (!view?.admin) return <Phone online={online}><Loading /></Phone>
@@ -27,21 +27,7 @@ export default function Admin() {
     ['game', t('admin.tabGame')],
   ]
   return (
-    <Phone online={online} wide chip={
-      <button type="button" aria-expanded={menu} aria-controls="admin-menu" onClick={() => setMenu(!menu)}
-        className="flex items-center gap-1 border-0 bg-transparent p-0 px-1 font-[inherit] tracking-[inherit] uppercase">
-        {t('role.admin')}<Icon name="down" size={14} />
-      </button>
-    }>
-      {menu && (
-        <section id="admin-menu" className="frame anim-rise flex items-center justify-between gap-3 p-3 lg:max-w-2xl">
-          <span className="text-sm text-muted">{t('admin.signedIn')}</span>
-          <button type="button" className="btn btn-ai" onClick={() => {
-            setMenu(false)
-            logout()
-          }}>{t('admin.logout')}</button>
-        </section>
-      )}
+    <Phone online={online} wide menu={<AdminMenu logout={logout} />}>
       <nav role="tablist" className="frame grid grid-cols-4 overflow-hidden p-0 lg:max-w-2xl">
         {tabs.map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
@@ -57,6 +43,44 @@ export default function Admin() {
       {tab === 'people' && <PeopleTab view={view} act={act} />}
       {tab === 'game' && <GameTab view={view} act={act} />}
     </Phone>
+  )
+}
+
+/** Konto-Menü oben rechts: klappt über der Seite auf, schließt bei Klick daneben oder Esc. */
+function AdminMenu({ logout }: { logout: () => void }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    addEventListener('pointerdown', onDown)
+    addEventListener('keydown', onKey)
+    return () => {
+      removeEventListener('pointerdown', onDown)
+      removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div ref={box} className="relative">
+      <button type="button" aria-expanded={open} aria-controls="admin-menu" onClick={() => setOpen(!open)}
+        className="chip cursor-pointer bg-card py-1 pr-2 pl-2.5 tracking-normal text-ink">
+        {t('role.admin')}<Icon name="down" size={14} />
+      </button>
+      {open && (
+        <section id="admin-menu" className="frame anim-rise absolute top-full right-0 z-30 mt-2 flex w-60 flex-col gap-3 p-4" style={{ boxShadow: 'var(--lift)' }}>
+          <div className="flex flex-col gap-1">
+            <span className="font-display text-lg font-extrabold">{t('role.admin')}</span>
+            <span className="text-sm text-muted">{t('admin.signedIn')}</span>
+          </div>
+          <button type="button" className="btn btn-ai" onClick={logout}>{t('admin.logout')}</button>
+        </section>
+      )}
+    </div>
   )
 }
 
@@ -313,11 +337,15 @@ function AnswerList({ view, act }: { view: View; act: Act }) {
 
 // ---------- Fragen ----------
 
+// Unbekannte Themen aus einem erweiterten Katalog erscheinen mit ihrem Rohnamen
+const topicName = (topic: string) => tError(`topic.${topic}`).replace(/^topic\./, '')
+
 function QuestionsTab({ view, act }: { view: View; act: Act }) {
-  const { plan, catalog, topics, settings } = view.admin!
-  const [custom, setCustom] = useState('')
-  // Unbekannte Themen aus einem erweiterten Katalog erscheinen mit ihrem Rohnamen
-  const topicName = (topic: string) => tError(`topic.${topic}`).replace(/^topic\./, '')
+  const { plan, catalog, topics, settings, own, hasDefaults } = view.admin!
+  const [draft, setDraft] = useState<QuestionDraft | null>(null)
+  const [ownOpen, setOwnOpen] = useState(false)
+  // Bearbeiten: Fragen aus der Sammlung mit ihren Antworten, spontane Plan-Fragen ohne
+  const edit = (q: string) => setDraft({ original: q, q, ai: own.find(o => o.q === q)?.ai ?? [], saved: own.some(o => o.q === q) })
   const toggleTopic = (topic: string) => act('settings', {
     settings: { topics: settings.topics.includes(topic) ? settings.topics.filter(x => x !== topic) : [...settings.topics, topic] },
   })
@@ -325,10 +353,16 @@ function QuestionsTab({ view, act }: { view: View; act: Act }) {
     <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start lg:gap-8">
     <div className="flex flex-col gap-4">
       <section className="flex flex-col gap-1">
-        <h2 className="display m-0 text-2xl">{tn('plan.title', plan.length)}</h2>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <h2 className="display m-0 text-2xl">{tn('plan.title', plan.length)}</h2>
+          {hasDefaults && (
+            <button type="button" className="btn min-h-8 px-2.5 text-xs" onClick={() => confirm(t('plan.loadDefaultsConfirm')) && act('defaults.load')}>{t('plan.loadDefaults')}</button>
+          )}
+        </div>
         <p className="m-0 text-sm text-muted">{t('plan.hint')}</p>
       </section>
-      <PlanList view={view} act={act} />
+      <PlanList view={view} act={act} onEdit={edit} />
+      {draft && <QuestionEditor view={view} draft={draft} onClose={() => setDraft(null)} />}
     </div>
     <div className="flex flex-col gap-4 lg:sticky lg:top-4">
       <section className="flex flex-col gap-2">
@@ -350,17 +384,32 @@ function QuestionsTab({ view, act }: { view: View; act: Act }) {
         <button className="btn" onClick={() => act('plan.add')}>{t('plan.addRandom')}</button>
         <button className="btn" onClick={() => act('plan.draw')}><Icon name="shuffle" size={18} />{t('plan.draw')}</button>
       </div>
-      <form className="flex gap-2" onSubmit={e => {
-        e.preventDefault()
-        act('plan.add', { question: custom })
-        setCustom('')
-      }}>
-        <input className="field min-w-0 text-base" placeholder={t('plan.customPlaceholder')} aria-label={t('plan.customPlaceholder')}
-          value={custom} maxLength={200} onChange={e => setCustom(e.target.value)} />
-        <button className="btn" disabled={!custom.trim()}>{t('plan.add')}</button>
-      </form>
-      <p className="m-0 text-sm text-muted">{t('plan.customHint')}</p>
-      {topics.map(topic => {
+      <button type="button" className="btn btn-primary" onClick={() => {
+        setOwnOpen(true) // aufklappen, damit die neue Frage nach dem Speichern zu sehen ist
+        setDraft({ q: '', ai: [] })
+      }}><Icon name="plus" size={18} />{t('own.new')}</button>
+      {/* Eigene Fragen: aufklappbar wie die Themen darunter, zusätzlich mit Bearbeiten */}
+      <details className="card p-4" open={ownOpen} onToggle={e => setOwnOpen(e.currentTarget.open)}>
+        <summary className="label cursor-pointer text-ink">{tn('plan.catalogTopic', own.length, { topic: topicName(OWN_TOPIC) })}</summary>
+        {!own.length && <p className="m-0 mt-2 text-sm text-muted">{t('own.empty')}</p>}
+        <ul className="m-0 mt-2 flex list-none flex-col p-0">
+          {own.map(o => {
+            const inPlan = plan.some(p => p.q === o.q)
+            return (
+              <li key={o.q} className="flex items-start gap-2 border-b border-line py-2 last:border-0">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="leading-snug">{o.q}</span>
+                  <span className={`label text-[11px] ${o.ai.length ? '' : 'text-ai-text'}`}>{o.ai.length ? tn('own.answers', o.ai.length) : t('own.noAnswers')}</span>
+                </div>
+                <button className="btn min-h-10 px-2.5" aria-label={t('own.edit', { q: o.q })} onClick={() => edit(o.q)}><Icon name="pen" size={18} /></button>
+                <button className="btn min-h-10 px-2.5" disabled={inPlan} aria-label={t('plan.addCatalog', { q: o.q })}
+                  onClick={() => act('plan.add', { catalog: catalog.findIndex(c => c.q === o.q) })}><Icon name={inPlan ? 'check' : 'plus'} size={18} /></button>
+              </li>
+            )
+          })}
+        </ul>
+      </details>
+      {topics.filter(topic => topic !== OWN_TOPIC).map(topic => {
         const list = catalog.map((c, i) => ({ ...c, i })).filter(c => c.topic === topic)
         return (
           <details key={topic} className="card p-4">
@@ -386,20 +435,31 @@ function QuestionsTab({ view, act }: { view: View; act: Act }) {
 }
 
 type PlanItem = NonNullable<View['admin']>['plan'][number]
-type Drag = { from: number; to: number; dy: number; startY: number; top: number; height: number; base: number; heights: number[] }
+/** q = Text der gezogenen Frage, done = losgelassen (die Karte folgt der Maus nicht mehr und wartet auf den neuen Plan). */
+type Drag = { q: string; done: boolean; from: number; to: number; dy: number; startY: number; top: number; height: number; base: number; heights: number[] }
 const GAP = 8 // entspricht gap-2 der Liste
 
 /**
  * Fragenplan: am Griff ziehen (Maus, Touch) oder Griff fokussieren und Pfeiltasten.
  * Beim Ziehen schwebt die Karte, ein gestrichelter Platz zeigt, wo sie landet, die anderen gleiten zur Seite.
  */
-function PlanList({ view, act }: { view: View; act: Act }) {
+function PlanList({ view, act, onEdit }: { view: View; act: Act; onEdit: (q: string) => void }) {
   const plan = view.admin!.plan
   const played = view.round
   const live = view.phase === 'answer' || view.phase === 'vote'
   const list = useRef<HTMLOListElement>(null)
-  const [drag, setDrag] = useState<Drag | null>(null)
+  const [dragState, setDragState] = useState<Drag | null>(null)
   const [focusQ, setFocusQ] = useState<string | null>(null)
+  // Stand des Ziehens ohne Warten aufs Rendern: Die Maus-Ereignisse lesen und schreiben hier,
+  // damit eine verspätete Bewegung nach dem Loslassen die Karte nicht wieder anhebt
+  const latest = useRef<Drag | null>(null)
+  const setDrag = (d: Drag | null) => {
+    latest.current = d
+    setDragState(d)
+  }
+  // Sobald der neue Plan da ist, steht die Frage nicht mehr an ihrem alten Platz: Dann ist das Ziehen vorbei
+  const drag = dragState && plan[dragState.from]?.q === dragState.q ? dragState : null
+  const dragging = !!drag && !drag.done
 
   const move = async (from: number, to: number) => {
     if (to !== from && to >= played && to < plan.length) {
@@ -414,7 +474,7 @@ function PlanList({ view, act }: { view: View; act: Act }) {
     const rows = [...list.current!.querySelectorAll<HTMLElement>('[data-row]')]
     const open = rows.slice(played)
     setDrag({
-      from: i, to: i, dy: 0, startY: e.pageY, top: rows[i].offsetTop, height: rows[i].offsetHeight,
+      q: plan[i].q, done: false, from: i, to: i, dy: 0, startY: e.pageY, top: rows[i].offsetTop, height: rows[i].offsetHeight,
       base: open[0].offsetTop, heights: open.filter(r => r !== rows[i]).map(r => r.offsetHeight),
     })
     buzz(8)
@@ -422,8 +482,10 @@ function PlanList({ view, act }: { view: View; act: Act }) {
 
   // Beim Ziehen am Fenster lauschen; die Plätze werden aus den Höhen beim Anheben berechnet, nicht aus dem wackelnden DOM
   useEffect(() => {
-    if (!drag) return
+    if (!dragging) return
     const onMove = (e: PointerEvent) => {
+      const drag = latest.current
+      if (!drag || drag.done) return
       const dy = e.pageY - drag.startY
       const center = drag.top + dy + drag.height / 2
       let best = 0, bestDist = Infinity, y = drag.base
@@ -437,7 +499,12 @@ function PlanList({ view, act }: { view: View; act: Act }) {
       if (e.clientY < 80) scrollBy(0, -16)
       else if (e.clientY > innerHeight - 80) scrollBy(0, 16)
     }
-    const onUp = () => move(drag.from, drag.to)
+    const onUp = () => {
+      const drag = latest.current
+      if (!drag || drag.done) return
+      setDrag({ ...drag, done: true })
+      move(drag.from, drag.to)
+    }
     const onCancel = () => setDrag(null)
     addEventListener('pointermove', onMove)
     addEventListener('pointerup', onUp)
@@ -447,7 +514,12 @@ function PlanList({ view, act }: { view: View; act: Act }) {
       removeEventListener('pointerup', onUp)
       removeEventListener('pointercancel', onCancel)
     }
-  }, [drag, plan])
+  }, [dragging])
+
+  // Hat sich der Plan während des Ziehens von anderswo geändert, wird abgebrochen statt eine falsche Karte zu bewegen
+  useEffect(() => {
+    if (dragState && !dragState.done && !drag) setDrag(null)
+  }, [dragState, drag])
 
   // Nach dem Verschieben per Tastatur bleibt der Fokus auf dem Griff
   useEffect(() => {
@@ -477,14 +549,13 @@ function PlanList({ view, act }: { view: View; act: Act }) {
         )}
         <div className="flex min-w-0 flex-col gap-1 pt-1">
           <p className="m-0 leading-snug">{q.q}</p>
-          {(locked || q.custom) && (
-            <span className="label text-[11px]">
-              {[locked && (live && i === played - 1 ? t('plan.current') : t('plan.played')), q.custom && t('plan.custom')].filter(Boolean).join(' · ')}
-            </span>
-          )}
+          <span className="label text-[11px]">
+            {[topicName(q.topic), locked && (live && i === played - 1 ? t('plan.current') : t('plan.played')), q.custom && t('own.noAnswers')].filter(Boolean).join(' · ')}
+          </span>
         </div>
         {!locked && (
           <div className="col-start-2 flex justify-end gap-1.5 sm:col-start-auto">
+            {(q.custom || q.own) && <button className="btn min-h-10 px-2.5" tabIndex={floating ? -1 : 0} aria-label={t('plan.edit', { n: i + 1 })} onClick={() => onEdit(q.q)}><Icon name="pen" size={18} /></button>}
             {!q.custom && <button className="btn min-h-10 px-2.5" tabIndex={floating ? -1 : 0} aria-label={t('plan.reroll', { n: i + 1 })} onClick={() => act('plan.reroll', { index: i })}><Icon name="shuffle" size={18} /></button>}
             <button className="btn min-h-10 px-2.5" tabIndex={floating ? -1 : 0} aria-label={t('plan.remove', { n: i + 1 })} onClick={() => act('plan.remove', { index: i })}><Icon name="x" size={18} /></button>
           </div>

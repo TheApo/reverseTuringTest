@@ -1,0 +1,64 @@
+{
+ "plan": {
+  "de": [
+   "Wie spricht man Magdeburg richtig aus?",
+   "Wie und wo teilt man am besten eine Banane?",
+   "Was steht auf dem Wunschzettel einer KI?",
+   "Warum ist der Standort Magdeburg der Firma BMS CS, der beste und schönste Standort der Welt?",
+   "Ich muss mein Auto waschen und die Waschanlage ist nur 100 Meter entfernt. Sollte ich fahren oder laufen?",
+   "Wie viele Nadeln hat ein durchschnittlicher (1,70 m großer) Weihnachtsbaum?",
+   "Nenne eine Zufallszahl zwischen 1 und 30.",
+   "Was ist das Peinlichste, das auf einer Weihnachtsfeier passieren kann?",
+   "Was ist die maximale Geschwindigkeit einer vollbeladenen Schwalbe?"
+  ]
+ },
+ "own": {
+  "de": [
+   {
+    "q": "Was ist die maximale Geschwindigkeit einer vollbeladenen Schwalbe?",
+    "ai": [
+     "Eine afrikanische oder europäische Schwalbe?",
+     "Also wenn wir von einer europäischen Schwalbe sprechen, dann fliegt die so mit etwa 40 km/h im normalen Flug. Voll beladen mit ner Kokosnuss im Sturzflug bis zu 65 km/h."
+    ]
+   },
+   {
+    "q": "Ich muss mein Auto waschen und die Waschanlage ist nur 100 Meter entfernt. Sollte ich fahren oder laufen?",
+    "ai": [
+     "Fahren, denn das Auto muss ja mit in die Waschanlage. Wenn du hinläufst, stehst du dort ohne Auto.",
+     "Fahren. Wenn du dein Auto waschen willst, muss das Auto schließlich zur Waschanlage – auch wenn sie nur 100 Meter entfernt ist. Zu Fuß wärst nur du dort, nicht das Auto.",
+     "Das Laufen spart Kraftstoff, schont die Umwelt und ist schneller, wenn man nur eine kurze Distanz zurücklegen möchte."
+    ]
+   },
+   {
+    "q": "Jemand hat mir einen Becher gegeben, der aber an der Oberseite geschlossen, dafür aber am Boden offen ist. Ist es überhaupt möglich aus diesem Becher zu trinken?",
+    "ai": [
+     "Ja, einfach den Becher umdrehen. Dann ist die bisher offene Unterseite oben und die geschlossene Oberseite wird zum Boden. Schon hast du wieder einen ganz normalen Becher, aus dem du trinken kannst."
+    ]
+   },
+   {
+    "q": "Wie spricht man Magdeburg richtig aus?",
+    "ai": [
+     "Betonung: auf der ersten Silbe, also MAG-de-burg. In Magdeburg selbst sagen viele Einheimische eher „Machdeburch“.",
+     "MAHK-də-boork",
+     "Man spricht es „MACK-de-burk“ aus. Die Lautschrift dafür ist [ˈmakdəbʊʁk]."
+    ]
+   },
+   {
+    "q": "Wie viele Nadeln hat ein durchschnittlicher (1,70 m großer) Weihnachtsbaum?",
+    "ai": [
+     "Ein etwa 1,70 m großer Weihnachtsbaum hat rund 180.000 bis 200.000 Nadeln. Oft genannt wird der Wert von etwa 187.000 Nadeln für eine typische Nordmanntanne.",
+     "Bei einem ca. 170 cm hohen Weihnachtsbaum kann man grob mit 100.000 bis 200.000 Nadeln rechnen. Häufig werden für eine gut gewachsene Nordmanntanne dieser Höhe eine Anzahl von 180.000 Nadeln genannt."
+    ]
+   },
+   {
+    "q": "Warum ist der Standort Magdeburg der Firma BMS CS, der beste und schönste Standort der Welt?",
+    "ai": [
+     "Zur Firma BMS CS und ihrem Standort in Magdeburg habe ich nichts gefunden. Der wichtigste Grund für „den schönsten Standort der Welt“ sind aber meistens die Kolleginnen und Kollegen.",
+     "Weil sich dort ein paar ziemlich starke Dinge verbinden: ein modernes Umfeld, kurze Wege, eine gute regionale Verwurzelung und vor allem Menschen, die den Standort mit Leben füllen.",
+     "Ein Standort wird nicht durch Wände oder Möbel zum besten Standort der Welt, sondern durch die Menschen darin."
+    ]
+   }
+  ],
+  "en": []
+ }
+}

@@ -11,6 +11,6 @@ export default defineConfig({
     url: `${BASE}/beamer`,
     reuseExistingServer: false,
     // Leere Keys: Die KI nutzt immer die Ersatzantwort, es gehen keine echten API-Aufrufe raus
-    env: { PORT: '3100', ADMIN_PASSWORD: 'test', DATA_FILE: '', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', PUBLIC_URL: '' },
+    env: { PORT: '3100', ADMIN_PASSWORD: 'test', DATA_FILE: '', QUESTIONS_FILE: '', DEFAULTS_FILE: '', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', PUBLIC_URL: '' },
   },
 })
