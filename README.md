@@ -84,14 +84,17 @@ Das Publikum hat zwei Aufgaben: **die KI entlarven** und **die lustigste Antwort
 
 Bei Gleichstand bekommen alle die Punkte. Die KIs stehen mit in der Rangliste: Mensch gegen Maschine.
 
+Auch im Publikum kann eine KI sitzen. Sie stimmt ab wie alle anderen, ihre Stimme zählt gleich viel, und sie sammelt Detektiv-Punkte.
+
 ## Was alles drinsteckt
 
 - **Echte KIs, live:** bis zu drei gleichzeitig, Claude (Haiku 5.5), ChatGPT und Gemini. Wählbar ist der Stil „natürlich“ (klingt wie eine KI) oder „getarnt“ (gibt sich menschlich). Die Antworten sind kurz und ohne Emojis, damit sich die KI nicht sofort verrät. Ohne Key oder bei Ausfall spielt eine vorbereitete Ersatzantwort.
+- **KI im Publikum:** Jede KI mit Key kann zusätzlich oder stattdessen mit abstimmen. Sie sucht die KI-Antworten und kürt die lustigste, ohne zu wissen, wer was geschrieben hat. Erkennt Claude die eigene Antwort wieder?
 - **62 Fragen pro Sprache** in drei Themen: Alltag & Allerlei, **Weihnachten** und Team-Insider. Den Fragenplan sortierst du per Drag & Drop. **Eigene Fragen** legst du im Admin samt Ersatzantworten an, sie bleiben für das nächste Spiel gespeichert.
 - **Avatar-Baukasten** mit 56 Varianten: Form, Farbe, Gesicht, Hut, Brille und Extras wie Schal, Fliege oder Weihnachtsmann-Bart. Bis zum Spielstart änderbar, live auf dem Beamer.
 - **Fühlt sich gut an:** Knöpfe geben beim Drücken nach, Stempel knallen auf die Antworten, die letzten zehn Sekunden pochen. Dazu kurzes Vibrieren am Handy und dezente Töne am Beamer.
 - **Hell und dunkel** in den Markenfarben, **Deutsch und Englisch**, jedes Handy wählt selbst.
-- **Moderation, die mitdenkt:** Live-Vorschau des Beamers, Antworten ausblenden, Personen entfernen, Pause und +15 Sekunden, Finale in drei Akten.
+- **Moderation, die mitdenkt:** Live-Vorschau des Beamers, Antworten ausblenden, Personen entfernen, Pause und +15 Sekunden, Finale in drei Akten. Nach jeder Auflösung entscheidest du: gleich die nächste Frage oder erst der **Zwischenstand**. Der zeigt bildschirmfüllend alle Spieler und die besten acht Detektive, sortiert sich sichtbar von der alten in die neue Reihenfolge und verrät, woher die Punkte stammen (getarnt oder lustigste).
 - **Robust:** ein einziger Befehl zum Starten. Der Spielstand übersteht Neustarts, und Handys verbinden sich nach dem Standby von selbst wieder.
 
 <p align="center"><img src="docs/screenshots/admin-desktop.png" alt="Moderation am Laptop mit Live-Vorschau des Beamers" width="900"></p>
@@ -161,7 +164,8 @@ Im Firmennetz kann ein Tunnel nach außen gesperrt oder nicht erlaubt sein. Klä
 | `GEMINI_API_KEY` | Gemini | `gemini-flash-latest` (`GEMINI_MODEL`) |
 
 - Ohne Key, bei einem Fehler, einer Ablehnung oder einer Zeitüberschreitung schreibt die KI eine vorbereitete **Ersatzantwort** aus dem Katalog. Das Spiel läuft also auch ganz ohne Keys. Eigene Fragen bekommen ihre Ersatzantworten im Admin (Reiter **Fragen** → **Neue Frage**). Fehlt dort eine, setzt die KI diese Runde aus.
-- Im Admin zeigt der Reiter **Spiel**, welche KI einen Key hat. In der Antwortliste steht „live in 2,1 s“ oder „Ersatzantwort“, den Grund findest du in der Server-Konsole (`[KI] …`).
+- Im Admin wählst du im Reiter **Spiel** pro KI, ob sie **im Spiel** antwortet, **im Publikum** abstimmt oder beides. Ins Publikum darf nur eine KI mit Key. Sie bekommt dasselbe wie die Handys: Frage, Antworten mit Buchstaben und die Anzahl der KIs. Bei einem Fehler, einer unlesbaren Antwort oder Zeitablauf gibt sie in dieser Runde keine Stimme ab (Grund in der Server-Konsole: `[KI im Publikum] …`). Die Abstimmung wartet auf ihre Stimme, bevor sie vorzeitig schließt.
+- Der Reiter **Spiel** zeigt auch, welche KI einen Key hat. In der Antwortliste steht „live in 2,1 s“ oder „Ersatzantwort“, den Grund findest du in der Server-Konsole (`[KI] …`).
 - Die KIs sollen kurz antworten (Ziel: gut die Hälfte des Zeichenlimits). Der Server entfernt zusätzlich Emojis und Smileys und kürzt notfalls am Satz- oder Wortende.
 
 ### Fragen ergänzen
@@ -215,7 +219,7 @@ Ein Spiel zur Zeit. Der Server schickt jedem Gerät nach jeder Änderung seinen 
 ### Sicherheit
 
 - Die **API-Keys bleiben auf dem Server**. Kein Browser bekommt sie zu sehen, der Admin sieht nur „Key vorhanden ja/nein“. Die `.env` ist von Git ausgeschlossen.
-- **Nur die Moderation löst KI-Anfragen aus**: eine pro KI und Runde. Besucher können keine Kosten verursachen.
+- **Nur die Moderation löst KI-Anfragen aus**: pro Runde eine je KI im Spiel und eine je KI im Publikum. Besucher können keine Kosten verursachen.
 - Der **Admin-Login ist gebremst**: Jeder Fehlversuch wird kurz verzögert, und nach 5 Fehlversuchen ist er für eine Minute gesperrt. Nimm trotzdem ein starkes Passwort, sobald das Spiel öffentlich erreichbar ist.
 - Für die Feier am besten **eigene Keys mit Ausgabelimit** anlegen und danach löschen.
 

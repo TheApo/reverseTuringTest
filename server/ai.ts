@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { Provider, Settings } from './game.ts'
+import type { Judge, Provider, Settings } from './game.ts'
 
 // Kurz und ohne Emojis: Lange Antworten am Zeichenlimit und Smileys verraten die KI sofort.
 const PROMPTS: Record<Settings['language'], Record<Settings['aiStyle'], (target: number) => string>> = {
@@ -46,6 +46,31 @@ export async function askAi(provider: Provider, question: string, settings: Sett
   const signal = AbortSignal.timeout(settings.answerSeconds * 1000)
   const text = await ASK[provider](key, system, question, signal)
   return clean(text, settings.maxChars)
+}
+
+// Die KI im Publikum erfährt nur, was auch auf den Handys steht: Frage, Antworten mit Buchstaben, Anzahl der KIs.
+const JURY_PROMPTS: Record<Settings['language'], (k: number) => string> = {
+  de: k =>
+    `Du sitzt im Publikum eines Partyspiels. Menschen beantworten eine Frage und versuchen dabei, wie eine KI zu klingen. ${k === 0 ? 'Diesmal stammt keine Antwort von einer KI.' : k === 1 ? 'Genau eine Antwort stammt von einer echten KI.' : `Genau ${k} Antworten stammen von echten KIs.`} Du stimmst ab: Welche Antworten sind von einer KI, und welche Antwort findest du am lustigsten? Antworte nur mit JSON in genau dieser Form, ohne weiteren Text: {"ai":["A"],"fun":"B"}. "ai" enthält genau ${k} Buchstaben, "fun" genau einen.`,
+  en: k =>
+    `You are in the audience of a party game. Humans answer a question and try to sound like an AI. ${k === 0 ? 'This time no answer comes from an AI.' : k === 1 ? 'Exactly one answer comes from a real AI.' : `Exactly ${k} answers come from real AIs.`} You vote: which answers are from an AI, and which answer do you find the funniest? Reply only with JSON in exactly this form, no other text: {"ai":["A"],"fun":"B"}. "ai" holds exactly ${k} letters, "fun" exactly one.`,
+}
+
+/** Liest die Stimme aus der Modellantwort. Ob die Buchstaben gültig sind, prüft das Spiel wie bei jedem Handy. */
+export function parseVote(text: string): { ai: unknown; fun: unknown } {
+  const json = text.match(/\{[\s\S]*\}/)?.[0]
+  if (!json) throw new Error('keine Stimme in der Antwort')
+  const { ai, fun } = JSON.parse(json)
+  if (!Array.isArray(ai) && typeof fun !== 'string') throw new Error('keine Stimme in der Antwort')
+  return { ai, fun }
+}
+
+export const askJury: Judge = async (provider, question, answers, k, settings) => {
+  const key = process.env[KEYS[provider]]
+  if (!key) throw new Error(`${KEYS[provider]} fehlt`)
+  const list = answers.map(a => `${a.letter}: ${a.text}`).join('\n')
+  const signal = AbortSignal.timeout(settings.voteSeconds * 1000)
+  return parseVote(await ASK[provider](key, JURY_PROMPTS[settings.language](k), `${question}\n\n${list}`, signal))
 }
 
 let claude: Anthropic | undefined

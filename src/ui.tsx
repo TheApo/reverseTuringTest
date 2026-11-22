@@ -200,17 +200,20 @@ export function Kicked() {
   )
 }
 
+/** Rote KI-Marke hinter dem Namen, z. B. für eine KI im Publikum. */
+export const AiTag = () => <span className="chip shrink-0 border-transparent bg-ai px-1.5 py-0 text-[11px] text-on-ai">{t('common.ai')}</span>
+
 /** Wer ist dabei: Spieler und Publikum getrennt und mit Namen, das eigene Schild ist hervorgehoben. */
 export function Crowd({ view }: { view: View }) {
   const humans = view.players.filter(p => !p.isAi)
-  const group = (icon: 'pen' | 'eye', title: string, people: { id: string; name: string; avatar: AvatarValue | null }[], more = 0) => (
+  const group = (icon: 'pen' | 'eye', title: string, people: { id: string; name: string; avatar: AvatarValue | null; bot?: string }[], more = 0) => (
     <div className="flex flex-col gap-2">
       <h3 className="label m-0 flex items-center gap-1.5 text-ink"><Icon name={icon} size={16} />{title}</h3>
       {people.length ? (
         <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
           {people.map(p => (
             <li key={p.id} className={`chip anim-pop max-w-full py-1 pr-2.5 pl-1.5 normal-case tracking-normal ${p.id === view.me?.id ? 'border-transparent bg-strong text-on-strong' : 'bg-card'}`}>
-              <Avatar value={p.avatar} seed={p.name} size={26} /><span className="min-w-0 truncate">{p.name}</span>
+              <Avatar value={p.avatar} seed={p.name} robot={p.bot} size={26} /><span className="min-w-0 truncate">{p.name}</span>{p.bot && <AiTag />}
             </li>
           ))}
           {more > 0 && <li className="label grid h-9 place-items-center px-1 text-ink">+{more}</li>}

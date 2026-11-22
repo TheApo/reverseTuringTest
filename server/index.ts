@@ -4,8 +4,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync
 import { networkInterfaces } from 'node:os'
 import { dirname, extname, resolve, sep } from 'node:path'
 import { Server } from 'socket.io'
-import { Game, type Catalog, type Defaults, type State } from './game.ts'
-import { askAi, KEYS } from './ai.ts'
+import { Game, type Catalog, type Defaults, type Provider, type State } from './game.ts'
+import { askAi, askJury, KEYS } from './ai.ts'
 import catalog from './questions.json' with { type: 'json' }
 
 if (existsSync('.env')) process.loadEnvFile() // vorhandene Umgebungsvariablen haben Vorrang
@@ -83,9 +83,10 @@ if (DEV) {
 const io = new Server(server, { destroyUpgrade: false })
 // Gespeichertes hat Vorrang: Der Startbestand gilt nur für ein frisches Spiel bzw. solange es keine eigene Fragen-Datei gibt
 const defaults = load<Defaults>(DEFAULTS_FILE)
-const game = new Game(catalog as Catalog, askAi, changed, load<State>(DATA_FILE), load<Catalog>(QUESTIONS_FILE), defaults)
-savedOwn = JSON.stringify(game.own, null, 1)
 const keys = Object.fromEntries(Object.entries(KEYS).map(([p, env]) => [p, !!process.env[env]]))
+const jury = { judge: askJury, keys: (Object.keys(KEYS) as Provider[]).filter(p => keys[p]) }
+const game = new Game(catalog as Catalog, askAi, changed, load<State>(DATA_FILE), load<Catalog>(QUESTIONS_FILE), defaults, jury)
+savedOwn = JSON.stringify(game.own, null, 1)
 
 function changed() {
   for (const s of io.sockets.sockets.values()) if (s.data.role) s.emit('state', viewFor(s.data))
@@ -172,5 +173,5 @@ server.listen(PORT, () => {
   console.log(`  Beamer:  http://localhost:${PORT}/beamer`)
   console.log(`  Admin:   http://localhost:${PORT}/admin`)
   console.log(`  Handys:  ${joinUrl}   (weitere Adressen: ${ips.join(', ') || '–'})`)
-  for (const [p, ok] of Object.entries(keys)) if (!ok) console.log(`  Hinweis: kein Key für ${p}, diese KI nutzt Ersatzantworten.`)
+  for (const [p, ok] of Object.entries(keys)) if (!ok) console.log(`  Hinweis: kein Key für ${p}, diese KI nutzt Ersatzantworten und kann nicht ins Publikum.`)
 })

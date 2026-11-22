@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Game, sanitizeAvatar, score, type Ask, type Catalog, type Person, type State } from './game.ts'
-import { clean, targetLength } from './ai.ts'
+import { Game, sanitizeAvatar, score, type Ask, type Catalog, type Judge, type Person, type State } from './game.ts'
+import { clean, parseVote, targetLength } from './ai.ts'
 import realCatalog from './questions.json' with { type: 'json' }
 
 const q = (n: number) => ({ q: `Frage ${n}?`, ai: [`KI-Antwort ${n} a`, `KI-Antwort ${n} b`, `KI-Antwort ${n} c`], topic: n % 2 ? 'christmas' : 'everyday' })
@@ -105,7 +105,7 @@ describe('Game', () => {
     game.act('reveal')
     const v = view()
     expect(v.phase).toBe('reveal')
-    expect(v.players.find(p => p.name === 'Mia')!.points).toBe(3) // +1 lustig, +2 getarnt
+    expect(v.players.find(p => p.name === 'Mia')).toMatchObject({ points: 3, fun: 1, disguise: 1 }) // +1 lustig, +2 getarnt
     expect(v.detectives).toEqual([]) // Kati lag daneben
   })
 
@@ -363,6 +363,90 @@ describe('Game', () => {
     expect(game.view({ role: 'audience', id: ben.id }).me!.rank).toBe(2)
   })
 
+  describe('KI im Publikum', () => {
+    let judge: ReturnType<typeof vi.fn<Judge>>
+    beforeEach(() => {
+      judge = vi.fn<Judge>()
+      game = new Game(catalog, ask, () => {}, undefined, undefined, {}, { judge, keys: ['claude', 'gemini'] })
+    })
+    const letters = () => {
+      const all = view().admin!.answers
+      return { ai: all.find(a => a.isAi)!.letter!, human: all.find(a => !a.isAi)!.letter! }
+    }
+
+    it('sitzt nur mit Key im Publikum, auch wenn sie zugleich mitspielt', () => {
+      game.act('settings', { settings: { audienceAis: ['claude', 'openai'] } }) // openai hat keinen Key
+      expect(game.state.settings).toMatchObject({ ais: ['claude'], audienceAis: ['claude'] })
+      expect(view().crowd).toEqual([{ id: 'jury-claude', name: 'Claude', avatar: null, bot: 'claude' }])
+      expect(view().audience).toBe(1)
+      expect(game.byToken('')).toBeUndefined() // niemand kann sich als die KI anmelden
+      game.act('kick', { id: 'jury-claude' })
+      expect(view().audience).toBe(1)
+      game.act('settings', { settings: { audienceAis: [] } })
+      expect(view().audience).toBe(0)
+    })
+
+    it('stimmt mit ab, sieht dabei nur Frage, Antworten und Anzahl der KIs, und sammelt Detektiv-Punkte', async () => {
+      game.act('settings', { settings: { audienceAis: ['claude'] } })
+      judge.mockImplementation(async () => ({ ai: [letters().ai, 'Z'], fun: letters().human }))
+      const mia = join('player', 'Mia')
+      game.act('start')
+      await vi.advanceTimersByTimeAsync(0)
+      game.answer(mia.id, 'Menschlich!', true)
+      expect(judge).toHaveBeenCalledWith('claude', game.state.round!.question.q, view().answers, 1, game.state.settings)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(view().voters).toBe(1)
+      expect(view().votingOpen).toBe(true) // ohne Menschen im Publikum läuft die Zeit normal weiter
+      game.act('reveal')
+      expect(view().detectives).toEqual([{ id: 'jury-claude', name: 'Claude', points: 1, avatar: null, bot: 'claude' }])
+      expect(view().players.find(p => p.name === 'Mia')!.points).toBe(1) // +1 lustig von der KI im Publikum
+    })
+
+    it('hält die Abstimmung offen, bis ihre Stimme da ist, und gibt bei einem Fehler keine ab', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      game.act('settings', { settings: { audienceAis: ['claude', 'gemini'] } })
+      let fail = (_: Error) => {}
+      judge.mockImplementation(provider => provider === 'gemini' ? Promise.reject(new Error('offline'))
+        : new Promise<never>((_, reject) => (fail = reject)))
+      const mia = join('player', 'Mia')
+      const kati = join('audience', 'Kati')
+      game.act('start')
+      await vi.advanceTimersByTimeAsync(0)
+      game.answer(mia.id, 'Menschlich!', true)
+      game.vote(kati.id, [letters().ai], letters().human)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(view().votingOpen).toBe(true) // Claude überlegt noch
+      fail(new Error('Zeit um'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(view().votingOpen).toBe(false)
+      expect(view().voters).toBe(1) // nur Kati
+    })
+  })
+
+  it('zeigt nach der Auflösung auf Wunsch den Zwischenstand, die nächste Auflösung beginnt wieder ohne', async () => {
+    const mia = join('player', 'Mia')
+    const kati = join('audience', 'Kati')
+    const playRound = async () => {
+      game.act('start')
+      await vi.advanceTimersByTimeAsync(0)
+      game.answer(mia.id, 'Menschlich!', true)
+      game.vote(kati.id, [view().admin!.answers.find(a => a.isAi)!.letter], 'A')
+      game.act('reveal')
+    }
+    game.act('standings')
+    expect(view().standings).toBe(false) // in der Lobby gibt es keinen
+    await playRound()
+    expect(view().standings).toBe(false)
+    game.act('standings')
+    expect(view().standings).toBe(true)
+    expect(view().detectives).toEqual([{ id: kati.id, name: 'Kati', points: 1, avatar: kati.avatar, bot: undefined }])
+    game.act('standings', { show: false })
+    expect(view().standings).toBe(false)
+    game.act('standings')
+    await playRound() // gleich weiter zur nächsten Frage
+    expect(view().standings).toBe(false)
+  })
+
   it('wechselt mit der Sprache den Fragenkatalog', () => {
     game.act('settings', { settings: { language: 'en' } })
     expect(view().admin!.plan.map(p => p.q)).toEqual(['Question?'])
@@ -424,6 +508,12 @@ describe('clean', () => {
   it('kürzt zu lange Antworten am Satzende oder am ganzen Wort, nie mitten im Wort', () => {
     expect(clean('Erst Kaffee trinken. Dann den Tag ganz entspannt angehen und lächeln.', 40)).toBe('Erst Kaffee trinken.')
     expect(clean('Kaffee trinken und den Tag entspannt angehen', 20)).toBe('Kaffee trinken und')
+  })
+
+  it('liest die Stimme der KI im Publikum auch aus Text drumherum und verwirft Unlesbares', () => {
+    expect(parseVote('```json\n{"ai": ["B"], "fun": "A"}\n```')).toEqual({ ai: ['B'], fun: 'A' })
+    expect(() => parseVote('Ich tippe auf B.')).toThrow()
+    expect(() => parseVote('{"antwort": "B"}')).toThrow()
   })
 
   it('peilt gut die Hälfte des Zeichenlimits an', () => {

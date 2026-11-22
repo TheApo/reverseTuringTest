@@ -13,6 +13,8 @@ export interface Settings {
   maxPlayers: number
   aiStyle: 'natural' | 'disguised'
   ais: Provider[]
+  /** KIs, die im Publikum mit abstimmen. Geht nur mit API-Key, eine KI darf zugleich mitspielen. */
+  audienceAis: Provider[]
   sound: boolean
   beamerTheme: 'light' | 'dark'
   /** Themen, aus denen Zufallsfragen gezogen werden (leer = alle). */
@@ -20,7 +22,7 @@ export interface Settings {
 }
 export const DEFAULT_SETTINGS: Settings = {
   language: 'de', answerSeconds: 60, voteSeconds: 45, maxChars: 200, maxPlayers: 5,
-  aiStyle: 'natural', ais: ['claude'], sound: true, beamerTheme: 'light', topics: [],
+  aiStyle: 'natural', ais: ['claude'], audienceAis: [], sound: true, beamerTheme: 'light', topics: [],
 }
 const DEFAULT_ROUNDS = 8
 
@@ -50,7 +52,8 @@ export function sanitizeAvatar(raw: unknown): Avatar {
   })) as Avatar
 }
 
-export interface Person { id: string; token: string; name: string; role: Role; points: number; avatar?: Avatar }
+/** bot = KI im Publikum: stimmt selbst ab, hat kein Handy und keinen Token. */
+export interface Person { id: string; token: string; name: string; role: Role; points: number; avatar?: Avatar; bot?: Provider }
 export interface Answer {
   authorId: string
   text: string
@@ -79,8 +82,14 @@ export interface State {
   paused: boolean; endsAt: number | null; remaining: number | null
   /** Finale auf dem Beamer: 0 Podium der Spieler, 1 Detektive, 2 beste Antworten. */
   finalStep?: number
+  /** Auflösung auf dem Beamer: statt der Antworten den Zwischenstand zeigen. Die Moderation entscheidet das nach jeder Runde. */
+  standings?: boolean
 }
 export type Ask = (provider: Provider, question: string, settings: Settings) => Promise<string>
+/** Stimme einer KI im Publikum. Sie bekommt, was die Menschen beim Abstimmen sehen: Frage, Antworten mit Buchstaben, Anzahl der KIs. */
+export type Judge = (provider: Provider, question: string, answers: { letter: string; text: string }[], k: number, settings: Settings) => Promise<{ ai: unknown; fun: unknown }>
+/** judge fragt die KI, keys = KIs mit API-Key. Nur sie dürfen ins Publikum. */
+export interface Jury { judge: Judge; keys: Provider[] }
 export type Viewer = { role?: 'beamer' | 'admin' | 'player' | 'audience'; id?: string }
 
 const LETTERS = 'ABCDEFGHIJKLMNOP'
@@ -141,12 +150,17 @@ export class Game {
   own: Catalog = { de: [], en: [] }
   private defaults: Defaults
   private ask: Ask
+  private jury: Jury
+  /** KIs im Publikum, deren Stimme für die laufende Abstimmung noch aussteht. */
+  private judging = new Set<string>()
   private onChange: () => void
 
-  /** own = gespeicherte eigene Fragen. Fehlen sie, gelten die aus dem Startbestand (defaults). */
-  constructor(catalog: Catalog, ask: Ask, onChange: () => void, saved?: State, own?: Partial<Catalog>, defaults: Defaults = {}) {
+  /** own = gespeicherte eigene Fragen. Fehlen sie, gelten die aus dem Startbestand (defaults). Ohne jury gibt es keine KI im Publikum. */
+  constructor(catalog: Catalog, ask: Ask, onChange: () => void, saved?: State, own?: Partial<Catalog>, defaults: Defaults = {},
+    jury: Jury = { judge: () => Promise.reject(new Error('keine Jury')), keys: [] }) {
     this.catalog = catalog
     this.defaults = defaults
+    this.jury = jury
     own ??= defaults.own
     this.ask = ask
     this.onChange = onChange
@@ -163,6 +177,7 @@ export class Game {
     }
     if (saved) {
       saved.settings = { ...DEFAULT_SETTINGS, ...saved.settings } // neue Einstellungen in alten Spielständen
+      this.setAudienceAis(saved.settings.audienceAis) // ein inzwischen entfernter Key nimmt die KI aus dem Publikum
       this.resume()
     }
     else this.startPlan(DEFAULT_ROUNDS)
@@ -196,7 +211,7 @@ export class Game {
   }
 
   byToken(token: unknown) {
-    return this.state.people.find(p => p.role !== 'ai' && p.token === token)
+    return this.state.people.find(p => p.role !== 'ai' && !p.bot && p.token === token)
   }
 
   connect(id: string) {
@@ -348,6 +363,10 @@ export class Game {
         if (err) return err
         break
       }
+      case 'standings':
+        if (s.phase !== 'reveal') return
+        s.standings = args.show !== false
+        break
       case 'end':
         this.stopTimer()
         s.phase = 'final'
@@ -373,7 +392,7 @@ export class Game {
       }
       case 'kick': {
         const p = this.person(String(args.id))
-        if (!p || p.role === 'ai') return
+        if (!p || p.role === 'ai' || p.bot) return // KIs kommen und gehen über die Einstellungen
         s.people = s.people.filter(x => x !== p)
         if (s.round) {
           s.round.answers = s.round.answers.filter(a => a.authorId !== p.id)
@@ -406,6 +425,7 @@ export class Game {
         const ais = (Object.keys(AI_NAMES) as Provider[]).filter(p => patch.ais!.includes(p))
         if (ais.length) s.ais = ais
       }
+      if (Array.isArray(patch.audienceAis)) this.setAudienceAis(patch.audienceAis)
       if (Array.isArray(patch.topics)) s.topics = this.topics().filter(t => patch.topics!.includes(t))
       if ((patch.language === 'de' || patch.language === 'en') && patch.language !== s.language) {
         s.language = patch.language
@@ -414,6 +434,17 @@ export class Game {
       }
     }
     this.changed()
+  }
+
+  /** KIs im Publikum sind echte Publikumsmitglieder: Sie sitzen sofort in der Lobby und sammeln Detektiv-Punkte. Ohne Key geht es nicht. */
+  private setAudienceAis(wanted: unknown[]) {
+    const s = this.state
+    const ais = (Object.keys(AI_NAMES) as Provider[]).filter(p => wanted.includes(p) && this.jury.keys.includes(p))
+    s.settings.audienceAis = ais
+    s.people = s.people.filter(p => !p.bot || ais.includes(p.bot))
+    for (const p of ais) {
+      if (!s.people.some(x => x.bot === p)) s.people.push({ id: `jury-${p}`, token: '', name: AI_NAMES[p], role: 'audience', points: 0, bot: p })
+    }
   }
 
   // ---------- Ablauf ----------
@@ -485,16 +516,37 @@ export class Game {
     r.votingOpen = true
     this.setTimer(s.settings.voteSeconds)
     this.changed()
+    this.askJury()
     this.checkVoteEnd()
+  }
+
+  /** Lässt die KIs im Publikum abstimmen. Klappt es nicht (Fehler, Zeit um, unlesbare Antwort), geben sie keine Stimme ab. */
+  private askJury() {
+    const r = this.state.round!
+    const answers = this.visible().map(a => ({ letter: a.letter!, text: a.text }))
+    // Eigene Liste pro Abstimmung: Eine verspätete Anfrage aus einer alten Runde räumt nur ihre eigene auf
+    const pending = this.judging = new Set<string>()
+    if (!answers.length) return
+    for (const bot of this.state.people.filter(p => p.bot && !r.votes[p.id])) {
+      pending.add(bot.id)
+      this.jury.judge(bot.bot!, r.question.q, answers, this.k(), this.state.settings)
+        .then(v => { if (this.state.round === r) this.vote(bot.id, v.ai, v.fun) })
+        .catch(err => console.warn(`[KI im Publikum] ${bot.name}: ${err?.message ?? err}`))
+        .finally(() => {
+          pending.delete(bot.id)
+          this.checkVoteEnd()
+        })
+    }
   }
 
   private checkVoteEnd() {
     const r = this.state.round
     if (this.state.phase !== 'vote' || !r?.votingOpen) return
-    const audience = this.state.people.filter(p => p.role === 'audience' && this.online.has(p.id))
+    // Vorzeitig schließen nur die Menschen. Die KIs im Publikum halten die Abstimmung höchstens offen, bis ihre Stimme da ist
+    const audience = this.state.people.filter(p => p.role === 'audience' && !p.bot && this.online.has(p.id))
     const k = this.k()
     const complete = (p: Person) => { const v = r.votes[p.id]; return !!v && v.ai.length === k && !!v.fun }
-    if (audience.length && audience.every(complete)) this.closeVoting()
+    if (audience.length && audience.every(complete) && !this.judging.size) this.closeVoting()
   }
 
   private closeVoting() {
@@ -519,6 +571,7 @@ export class Game {
     r.votingOpen = false
     s.history.push(r.result)
     s.phase = 'reveal'
+    s.standings = false // jede Auflösung beginnt mit den Antworten
   }
 
   // ---------- Timer ----------
@@ -544,10 +597,11 @@ export class Game {
     else if (this.state.phase === 'vote') this.closeVoting()
   }
 
-  /** Nach einem Server-Neustart: Timer wieder aufziehen und offene KI-Antworten neu anfragen. */
+  /** Nach einem Server-Neustart: Timer wieder aufziehen, offene KI-Antworten und KI-Stimmen neu anfragen. */
   private resume() {
     this.schedule()
     if (this.state.phase === 'answer') this.askAis()
+    if (this.state.phase === 'vote' && this.state.round?.votingOpen) this.askJury()
   }
 
   // ---------- Hilfen ----------
@@ -605,6 +659,13 @@ export class Game {
     const audience = s.people.filter(p => p.role === 'audience')
     const byPoints = <T extends { points: number }>(list: T[]) => [...list].sort((a, b) => b.points - a.points)
     const mine = me && r?.answers.find(x => x.authorId === me.id)
+    // Detektive: die besten 8. Wer mit dieser Runde herausgefallen ist, hängt hinten an, damit der Zwischenstand den Abstieg zeigen kann
+    const before = (p: Person) => p.points - (s.phase === 'reveal' ? r?.result?.deltas[p.id] ?? 0 : 0)
+    const sleuths = byPoints(audience).filter(p => p.points > 0)
+    const top = sleuths.slice(0, 8)
+    const dropped = [...sleuths].sort((a, b) => before(b) - before(a)).slice(0, 8).filter(p => before(p) > 0 && !top.includes(p))
+    // Woher die Punkte eines Spielers stammen: wie oft „perfekt getarnt“ (+2) und wie oft „lustigste“ (+1)
+    const won = (id: string, bonus: 'fun' | 'disguise') => s.history.filter(h => h.answers.some(a => a.authorId === id && a.bonus.includes(bonus))).length
     const base = {
       phase: s.phase,
       paused: s.paused,
@@ -624,11 +685,13 @@ export class Game {
       players: byPoints(this.players()).map(p => ({
         id: p.id, name: p.name, points: p.points, isAi: p.role === 'ai', avatar: p.avatar ?? null,
         done: !!r?.answers.some(a => a.authorId === p.id && a.final),
+        fun: won(p.id, 'fun'), disguise: won(p.id, 'disguise'),
       })),
       audience: audience.length,
-      detectives: byPoints(audience).filter(p => p.points > 0).slice(0, 3).map(p => ({ name: p.name, points: p.points, avatar: p.avatar ?? null })),
+      // Podest und Auflösung zeigen davon die ersten 3, der Zwischenstand die ersten 8
+      detectives: [...top, ...dropped].map(p => ({ id: p.id, name: p.name, points: p.points, avatar: p.avatar ?? null, bot: p.bot })),
       // shortcut: zeigt höchstens 60 Köpfe im Publikum, der Rest erscheint als „+N“
-      crowd: audience.slice(0, 60).map(p => ({ id: p.id, name: p.name, avatar: p.avatar ?? null })),
+      crowd: audience.slice(0, 60).map(p => ({ id: p.id, name: p.name, avatar: p.avatar ?? null, bot: p.bot })),
       // Vor der Auflösung nur Buchstabe und Text, niemals Absender
       answers: s.phase === 'vote' ? this.visible().map(a => ({ letter: a.letter!, text: a.text })) : null,
       votingOpen: !!r?.votingOpen,
@@ -636,6 +699,7 @@ export class Game {
       result: s.phase === 'reveal' ? r?.result ?? null : null,
       final: s.phase === 'final' ? this.finale() : null,
       finalStep: s.finalStep ?? 0,
+      standings: s.phase === 'reveal' && !!s.standings,
       me: me ? {
         id: me.id, name: me.name, points: me.points, avatar: me.avatar ?? null,
         // Platz unter Gleichen: Spieler gegen Spieler und KIs, Publikum gegen Publikum
@@ -659,7 +723,7 @@ export class Game {
       hasDefaults: !!(this.defaults.plan?.[s.settings.language]?.length || this.defaults.own?.[s.settings.language]?.length),
       catalog: this.questions().map(q => ({ q: q.q, topic: q.topic ?? '' })),
       topics: this.topics(),
-      people: s.people.filter(p => p.role !== 'ai').map(p => ({ id: p.id, name: p.name, role: p.role, points: p.points, avatar: p.avatar ?? null, online: this.online.has(p.id) })),
+      people: s.people.filter(p => p.role !== 'ai').map(p => ({ id: p.id, name: p.name, role: p.role, points: p.points, avatar: p.avatar ?? null, online: !!p.bot || this.online.has(p.id), bot: p.bot })),
       answers: (s.round?.answers ?? []).map(a => ({ ...a, name: this.person(a.authorId)?.name ?? '?', isAi: this.person(a.authorId)?.role === 'ai' })),
     }
   }

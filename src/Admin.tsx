@@ -5,7 +5,7 @@ import { Avatar, PersonAvatar } from './Avatar.tsx'
 import { t, tError, tn, type Key } from './i18n.ts'
 import { QuestionEditor, type QuestionDraft } from './QuestionEditor.tsx'
 import { admin, useGame, type View } from './socket.ts'
-import { Icon, JoinForm, Loading, Phone, SPRING, buzz, clock, rankOf, secondsLeft, timerClass, useNow } from './ui.tsx'
+import { AiTag, Icon, JoinForm, Loading, Phone, SPRING, buzz, clock, rankOf, secondsLeft, timerClass, useNow } from './ui.tsx'
 
 type Act = (type: string, args?: Record<string, unknown>) => Promise<void>
 type Tab = 'round' | 'questions' | 'people' | 'game'
@@ -128,6 +128,12 @@ function RoundTab({ view, act }: { view: View; act: Act }) {
         {view.phase === 'reveal' && (next
           ? <button className="btn btn-primary" onClick={() => act('start')}>{t('admin.next')}</button>
           : <button className="btn btn-primary" onClick={() => act('end')}>{t('admin.toFinal')}</button>)}
+        {/* Freiwilliger Zwischenschritt: Der Beamer wechselt von den Antworten zur Rangliste und zurück */}
+        {view.phase === 'reveal' && (
+          <button className="btn" aria-pressed={view.standings} onClick={() => act('standings', { show: !view.standings })}>
+            {view.standings ? t('admin.hideStandings') : t('admin.showStandings')}
+          </button>
+        )}
         {view.phase === 'vote' && <button className="btn btn-primary btn-ai" onClick={() => act('reveal')}>{t('admin.reveal')}</button>}
         {running && (
           <div className="grid grid-cols-2 gap-2">
@@ -209,7 +215,7 @@ function WhoIsHere({ view }: { view: View }) {
       <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
         {people.filter(p => p.role === role).map(p => (
           <li key={p.id} className={'chip anim-pop py-1 pl-1.5 normal-case tracking-normal ' + (p.online ? 'bg-card' : 'text-muted')}>
-            <Avatar value={p.avatar} seed={p.name} size={26} />{p.name}<span className={'size-2 rounded-pill ' + (p.online ? 'bg-fun' : 'bg-line')} />
+            <Avatar value={p.avatar} seed={p.name} robot={p.bot} size={26} />{p.name}{p.bot && <AiTag />}<span className={'size-2 rounded-pill ' + (p.online ? 'bg-fun' : 'bg-line')} />
           </li>
         ))}
       </ul>
@@ -600,12 +606,13 @@ function PeopleTab({ view, act }: { view: View; act: Act }) {
         {!list.length && <p className="m-0 text-muted">{t('people.nobody')}</p>}
         {list.map(p => (
           <div key={p.id} className="card flex items-center gap-3 p-2.5 pl-3">
-            <Avatar value={p.avatar} seed={p.name} size={36} />
-            <span className="min-w-0 flex-1 truncate font-bold">{p.name}</span>
+            <Avatar value={p.avatar} seed={p.name} robot={p.bot} size={36} />
+            <span className="flex min-w-0 flex-1 items-center gap-2 font-bold"><span className="truncate">{p.name}</span>{p.bot && <AiTag />}</span>
             <span className={`size-2.5 shrink-0 rounded-pill ${p.online ? 'bg-fun' : 'bg-line'}`} title={p.online ? t('people.online') : t('people.offline')} />
             <span className="num text-2xl">{p.points}</span>
-            <button className="btn min-h-10 px-3 text-sm" aria-label={t('people.kickAria', { name: p.name })}
-              onClick={() => confirm(t('people.kickConfirm', { name: p.name })) && act('kick', { id: p.id })}>{t('people.kick')}</button>
+            {/* KIs im Publikum verwaltet der Reiter „Spiel“ */}
+            {!p.bot && <button className="btn min-h-10 px-3 text-sm" aria-label={t('people.kickAria', { name: p.name })}
+              onClick={() => confirm(t('people.kickConfirm', { name: p.name })) && act('kick', { id: p.id })}>{t('people.kick')}</button>}
           </div>
         ))}
       </section>
@@ -646,16 +653,25 @@ function GameTab({ view, act }: { view: View; act: Act }) {
       <fieldset className="m-0 flex flex-col gap-2 border-0 p-0" disabled={!lobby}>
         <legend className="label mb-2 p-0 text-ink">{t('settings.ais')}</legend>
         {(Object.keys(AI_NAMES) as Provider[]).map(p => {
-          const on = s.ais.includes(p)
+          const plays = s.ais.includes(p), watches = s.audienceAis.includes(p)
+          const hasKey = !!view.keys?.[p]
+          const toggle = (list: Provider[], on: boolean) => (on ? list.filter(x => x !== p) : [...list, p])
           return (
-            <label key={p} className="card flex items-center gap-3 p-3">
-              <input type="checkbox" className="size-5 accent-[var(--strong)]" checked={on} disabled={on && s.ais.length === 1}
-                onChange={() => set({ ais: on ? s.ais.filter(x => x !== p) : [...s.ais, p] })} />
+            <div key={p} className="card flex flex-wrap items-center gap-x-4 gap-y-2 p-3">
               <span className="flex-1 font-bold">{AI_NAMES[p]}</span>
-              {view.keys && !view.keys[p] && <span className="label text-[11px]">{t('settings.noKey')}</span>}
-            </label>
+              {!hasKey && <span className="label text-[11px]">{t('settings.noKey')}</span>}
+              <label className="flex min-h-8 items-center gap-2 text-sm font-bold">
+                <input type="checkbox" className="size-5 accent-[var(--strong)]" checked={plays} disabled={plays && s.ais.length === 1}
+                  onChange={() => set({ ais: toggle(s.ais, plays) })} />{t('settings.aiPlays')}
+              </label>
+              <label className={`flex min-h-8 items-center gap-2 text-sm font-bold ${hasKey ? '' : 'text-muted'}`}>
+                <input type="checkbox" className="size-5 accent-[var(--strong)]" checked={watches} disabled={!hasKey}
+                  onChange={() => set({ audienceAis: toggle(s.audienceAis, watches) })} />{t('settings.aiWatches')}
+              </label>
+            </div>
           )
         })}
+        <p className="m-0 text-sm text-muted">{t('settings.aisHint')}</p>
       </fieldset>
       <Choice label={t('settings.aiStyle')} disabled={!lobby} value={s.aiStyle}
         options={[['natural', t('settings.styleNatural')], ['disguised', t('settings.styleDisguised')]]} onChange={aiStyle => set({ aiStyle })} />
